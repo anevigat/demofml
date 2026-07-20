@@ -1,4 +1,5 @@
 # Infrastructure
 
-Docker, GitHub Actions, Kubernetes Jobs, MinIO, PostgreSQL, and MLflow
-definitions will be introduced in their corresponding project phases.
+Kubernetes resources and operational instructions live in [`k8s/`](k8s/).
+The deployment is namespace-scoped and must never create or modify resources
+outside the existing `demofml` namespace.

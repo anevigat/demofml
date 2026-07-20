@@ -72,9 +72,12 @@ the immutable image digest printed by the image publishing workflow:
 anevigat/demofml@sha256:<digest>
 ```
 
+The same workflow publishes an `mlflow-main` variant containing the tracking
+server and PostgreSQL driver used by the Kubernetes infrastructure.
+
 ## Status
 
-Phase 3, Docker image, continuous integration, and image publication.
+Phase 4, Kubernetes research infrastructure.
 
 ## License
 

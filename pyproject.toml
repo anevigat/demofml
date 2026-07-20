@@ -12,6 +12,9 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 dependencies = []
 
+[project.scripts]
+demofml = "demofml.cli:main"
+
 [project.optional-dependencies]
 dev = [
   "mypy>=1.15,<2",

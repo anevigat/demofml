@@ -55,9 +55,26 @@ mypy src
 python -m demofml
 ```
 
+## Container Image
+
+Images are published for Linux AMD64 and ARM64 at
+[`anevigat/demofml`](https://hub.docker.com/r/anevigat/demofml).
+
+```bash
+docker pull anevigat/demofml:main
+docker run --rm anevigat/demofml:main
+```
+
+The `main` tag is convenient for local inspection. Reproducible jobs must pin
+the immutable image digest printed by the image publishing workflow:
+
+```text
+anevigat/demofml@sha256:<digest>
+```
+
 ## Status
 
-Phase 2, repository and project structure.
+Phase 3, Docker image, continuous integration, and image publication.
 
 ## License
 

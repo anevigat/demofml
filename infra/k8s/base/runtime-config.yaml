@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demofml-runtime
+data:
+  AWS_DEFAULT_REGION: us-east-1
+  S3_ENDPOINT_URL: http://minio:9000
+  MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+  MLFLOW_TRACKING_URI: http://mlflow:5000
+  DEMOFML_DATA_BUCKET: demofml-data
+  DEMOFML_ARTIFACTS_BUCKET: demofml-artifacts

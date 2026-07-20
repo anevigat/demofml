@@ -1,0 +1,108 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-bootstrap
+  labels:
+    app.kubernetes.io/name: minio-bootstrap
+spec:
+  backoffLimit: 4
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: minio-bootstrap
+    spec:
+      restartPolicy: Never
+      serviceAccountName: demofml-workload
+      automountServiceAccountToken: false
+      nodeSelector:
+        intechsol.com/workload: demofml
+      tolerations:
+        - key: intechsol.com/workload
+          operator: Equal
+          value: demofml
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap
+          image: minio/mc:RELEASE.2025-04-16T18-13-26Z@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3
+          imagePullPolicy: IfNotPresent
+          command: [sh, -c]
+          args:
+            - |
+              set -eu
+              until mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
+                sleep 2
+              done
+              mc mb --ignore-existing "local/$DEMOFML_DATA_BUCKET"
+              mc mb --ignore-existing "local/$DEMOFML_ARTIFACTS_BUCKET"
+              cat > /tmp/policy.json <<EOF
+              {
+                "Version": "2012-10-17",
+                "Statement": [{
+                  "Effect": "Allow",
+                  "Action": ["s3:*"],
+                  "Resource": [
+                    "arn:aws:s3:::$DEMOFML_DATA_BUCKET",
+                    "arn:aws:s3:::$DEMOFML_DATA_BUCKET/*",
+                    "arn:aws:s3:::$DEMOFML_ARTIFACTS_BUCKET",
+                    "arn:aws:s3:::$DEMOFML_ARTIFACTS_BUCKET/*"
+                  ]
+                }]
+              }
+              EOF
+              mc admin policy info local demofml-access >/dev/null 2>&1 || \
+                mc admin policy create local demofml-access /tmp/policy.json
+              mc admin user info local "$AWS_ACCESS_KEY_ID" >/dev/null 2>&1 || \
+                mc admin user add local "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY"
+              mc admin policy attach local demofml-access --user "$AWS_ACCESS_KEY_ID"
+          envFrom:
+            - configMapRef:
+                name: demofml-runtime
+          env:
+            - name: MC_CONFIG_DIR
+              value: /tmp/.mc
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: demofml-minio-root
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: demofml-minio-root
+                  key: MINIO_ROOT_PASSWORD
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: demofml-services
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: demofml-services
+                  key: AWS_SECRET_ACCESS_KEY
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

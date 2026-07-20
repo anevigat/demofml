@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: demofml
+resources:
+  - service-account.yaml
+  - runtime-config.yaml
+  - postgres.yaml
+  - minio.yaml
+  - minio-bootstrap.yaml
+  - mlflow.yaml
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: demofml
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: false

@@ -9,5 +9,5 @@ def test_version() -> None:
 
 
 def test_cli(capsys: pytest.CaptureFixture[str]) -> None:
-    main()
+    main([])
     assert capsys.readouterr().out == "demofml 0.1.0\n"

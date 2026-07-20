@@ -40,6 +40,7 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
+          target: runtime
           load: true
           pull: true
           tags: demofml:scan
@@ -50,6 +51,27 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: demofml:scan
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+
+      - name: Build MLflow scan candidate
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: mlflow
+          load: true
+          pull: true
+          tags: demofml:mlflow-scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan MLflow image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: demofml:mlflow-scan
           format: table
           exit-code: "1"
           ignore-unfixed: true
@@ -74,11 +96,24 @@ jobs:
             type=sha,prefix=sha-
           flavor: latest=false
 
+      - name: Generate MLflow image metadata
+        id: mlflow_metadata
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=mlflow-main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern=mlflow-{{version}}
+            type=semver,pattern=mlflow-{{major}}.{{minor}}
+            type=sha,prefix=mlflow-sha-
+          flavor: latest=false
+
       - name: Publish multi-platform image
         id: publish
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
+          target: runtime
           platforms: linux/amd64,linux/arm64
           push: true
           pull: true
@@ -89,7 +124,26 @@ jobs:
           provenance: mode=max
           sbom: true
 
+      - name: Publish multi-platform MLflow image
+        id: publish_mlflow
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: mlflow
+          platforms: linux/amd64,linux/arm64
+          push: true
+          pull: true
+          tags: ${{ steps.mlflow_metadata.outputs.tags }}
+          labels: ${{ steps.mlflow_metadata.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
       - name: Record immutable image reference
         env:
           DIGEST: ${{ steps.publish.outputs.digest }}
-        run: echo "${IMAGE_NAME}@${DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+          MLFLOW_DIGEST: ${{ steps.publish_mlflow.outputs.digest }}
+        run: |
+          echo "${IMAGE_NAME}@${DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+          echo "${IMAGE_NAME}@${MLFLOW_DIGEST}" >> "$GITHUB_STEP_SUMMARY"

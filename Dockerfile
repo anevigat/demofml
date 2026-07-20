@@ -30,3 +30,13 @@ USER 10001:10001
 WORKDIR /home/demofml
 
 ENTRYPOINT ["python", "-m", "demofml"]
+
+FROM runtime AS mlflow
+
+USER 0:0
+RUN python -m pip install \
+    "mlflow==3.14.0" \
+    "psycopg[binary]==3.3.4"
+USER 10001:10001
+
+ENTRYPOINT ["mlflow"]

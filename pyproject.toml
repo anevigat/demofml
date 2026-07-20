@@ -10,7 +10,10 @@ readme = "README.md"
 requires-python = ">=3.12,<3.15"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-dependencies = []
+dependencies = [
+  "boto3==1.43.51",
+  "mlflow-skinny==3.14.0",
+]
 
 [project.scripts]
 demofml = "demofml.cli:main"

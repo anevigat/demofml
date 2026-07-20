@@ -1,0 +1,21 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Market data, generated datasets, experiments, and model artifacts are private.
+/data/
+/artifacts/
+/mlruns/
+/models/

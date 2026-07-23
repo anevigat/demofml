@@ -1,0 +1,26 @@
+id = "causal-v1"
+source = "quote-bars-v1"
+decision_time = "bar_end"
+bar_interval_minutes = 5
+return_lags_bars = [1, 3, 12]
+realized_volatility_windows_bars = [12, 72]
+spread_zscore_window_bars = 72
+gap_policy = "reset_trailing_state"
+
+features = [
+  "mid_return_1",
+  "mid_return_3",
+  "mid_return_12",
+  "realized_volatility_12",
+  "realized_volatility_72",
+  "spread_bps",
+  "spread_zscore_72",
+  "mid_range_bps",
+  "quote_count_log1p",
+  "staleness_seconds",
+  "elapsed_seconds",
+  "hour_sin",
+  "hour_cos",
+  "weekday_sin",
+  "weekday_cos",
+]

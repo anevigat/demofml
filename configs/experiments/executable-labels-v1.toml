@@ -1,0 +1,18 @@
+id = "executable-v1"
+source = "quote-bars-v1"
+decision_time = "bar_end"
+entry = "first_quote_at_or_after_decision"
+exit = "first_quote_at_or_after_horizon"
+horizons_minutes = [15, 30, 60]
+minimum_return_bps = 0.0
+source_bar_interval_minutes = 5
+max_entry_latency_minutes = 5
+max_exit_latency_minutes = 5
+
+[returns]
+long = "exit_bid / entry_ask - 1"
+short = "1 - exit_ask / entry_bid"
+
+[actions]
+positive_best_return = ["long", "short"]
+otherwise = "flat"

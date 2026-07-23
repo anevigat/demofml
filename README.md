@@ -194,9 +194,42 @@ The output includes separate bid, ask, and mid OHLC values, spread statistics,
 quote count, first/last tick times, and close-time staleness. Generated quality
 reports and bars remain below the ignored `artifacts/` directory.
 
+## Causal Features And Executable Labels
+
+Feature set `causal-v1` uses only a completed bar and bounded trailing state.
+It includes mid-price returns, realized volatility, spread level/z-score,
+intrabar range, quote activity, staleness, elapsed time, and UTC calendar
+cycles. Missing five-minute buckets reset all trailing windows so weekend or
+outage gaps cannot silently enter fixed-bar lookbacks. Build it independently
+for each symbol:
+
+```bash
+python scripts/build_features.py \
+  --source artifacts/bars/EURUSD/quotes-5m.parquet \
+  --output artifacts/features/EURUSD/causal-v1.parquet \
+  --symbol EURUSD
+```
+
+Label set `executable-v1` enters on the first quote at or after each decision.
+Long returns pay the entry ask and receive the horizon exit bid; short returns
+receive the entry bid and pay the horizon exit ask. Entry and exit quotes must
+arrive within five minutes of their scheduled time; otherwise the affected
+label is null. Horizons must align to the five-minute bar grid. Labels are kept
+separate from features to make leakage checks explicit:
+
+```bash
+python scripts/build_labels.py \
+  --source artifacts/bars/EURUSD/quotes-5m.parquet \
+  --output artifacts/labels/EURUSD/executable-v1.parquet \
+  --horizons-minutes 15,30,60
+```
+
+The immutable definitions are recorded in `configs/features/causal-v1.toml`
+and `configs/experiments/executable-labels-v1.toml`.
+
 ## Status
 
-Phase 5 data publication and Phase 6 tick quality/bar construction in progress.
+Phase 5 publication, Phase 6 bars, and Phase 7 features/labels in progress.
 
 ## License
 

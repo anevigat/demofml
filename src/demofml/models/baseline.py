@@ -26,7 +26,7 @@ from demofml.validation.splits import (
 )
 
 MODEL_SET_ID = "baseline-ridge-v1"
-PREDICTION_SET_ID = "walk-forward-predictions-v1"
+PREDICTION_SET_ID = "walk-forward-predictions-v2"
 FEATURE_COLUMNS = tuple(FEATURE_SCHEMA.names[2:])
 
 
@@ -93,6 +93,8 @@ class AlignedResearchData:
 
     symbol: str
     decision_times: tuple[datetime, ...]
+    entry_times: tuple[datetime | None, ...]
+    exit_times: dict[int, tuple[datetime | None, ...]]
     features: NDArray[np.float64]
     long_targets: dict[int, NDArray[np.float64]]
     short_targets: dict[int, NDArray[np.float64]]
@@ -137,6 +139,8 @@ def prediction_schema(config: BaselineConfig) -> pa.Schema:
             pa.field("fold_id", pa.string(), nullable=False),
             pa.field("symbol", pa.string(), nullable=False),
             pa.field("decision_time", pa.timestamp("ns", tz="UTC"), nullable=False),
+            pa.field("entry_time", pa.timestamp("ns", tz="UTC"), nullable=False),
+            pa.field("exit_time", pa.timestamp("ns", tz="UTC"), nullable=False),
             pa.field("horizon_minutes", pa.int16(), nullable=False),
             pa.field("predicted_long_return", pa.float64(), nullable=False),
             pa.field("predicted_short_return", pa.float64(), nullable=False),
@@ -191,10 +195,11 @@ def align_research_tables(
     required_labels = {
         "symbol",
         "decision_time",
+        "entry_time",
         *(
-            f"{side}_return_{horizon}m"
+            f"{field}_{horizon}m"
             for horizon in config.horizons_minutes
-            for side in ("long", "short")
+            for field in ("exit_time", "long_return", "short_return")
         ),
     }
     missing_labels = required_labels.difference(labels.column_names)
@@ -227,6 +232,11 @@ def align_research_tables(
     matrix = np.column_stack(
         [_float_column(features, name) for name in config.features]
     )
+    entry_times = tuple(labels.column("entry_time").to_pylist())
+    exit_times = {
+        horizon: tuple(labels.column(f"exit_time_{horizon}m").to_pylist())
+        for horizon in config.horizons_minutes
+    }
     long_targets = {
         horizon: _float_column(labels, f"long_return_{horizon}m")
         for horizon in config.horizons_minutes
@@ -238,6 +248,8 @@ def align_research_tables(
     return AlignedResearchData(
         symbol_value,
         decision_times,
+        entry_times,
+        exit_times,
         matrix,
         long_targets,
         short_targets,
@@ -324,6 +336,15 @@ def run_walk_forward(
                 action = _action(
                     predicted_long, predicted_short, config.action_threshold
                 )
+                entry_time = data.entry_times[row_index]
+                exit_time = data.exit_times[horizon][row_index]
+                decision_time = data.decision_times[row_index]
+                if (
+                    not isinstance(entry_time, datetime)
+                    or not isinstance(exit_time, datetime)
+                    or not decision_time <= entry_time < exit_time
+                ):
+                    raise RuntimeError("resolved label execution times are invalid")
                 realized = (
                     float(long_targets[row_index])
                     if action == "long"
@@ -337,7 +358,9 @@ def run_walk_forward(
                         "validation_set": plan.id,
                         "fold_id": fold.id,
                         "symbol": data.symbol,
-                        "decision_time": data.decision_times[row_index],
+                        "decision_time": decision_time,
+                        "entry_time": entry_time,
+                        "exit_time": exit_time,
                         "horizon_minutes": horizon,
                         "predicted_long_return": predicted_long,
                         "predicted_short_return": predicted_short,

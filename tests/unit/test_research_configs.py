@@ -1,6 +1,12 @@
 import tomllib
 from pathlib import Path
 
+from demofml.evaluation.portfolio import (
+    PORTFOLIO_HORIZONS,
+    PORTFOLIO_SET_ID,
+    PORTFOLIO_SYMBOLS,
+    load_portfolio_config,
+)
 from demofml.features.causal import FEATURE_SET_ID
 from demofml.labels.executable import (
     BAR_INTERVAL_MINUTES,
@@ -65,3 +71,15 @@ def test_baseline_config_matches_implementation() -> None:
     assert config.horizons_minutes == DEFAULT_HORIZONS_MINUTES
     assert config.action_threshold_bps == 0.0
     assert config.locked_test_policy == "forbidden"
+
+
+def test_portfolio_config_matches_implementation() -> None:
+    path = PROJECT_ROOT / "configs/experiments/portfolio-v1.toml"
+    config = load_portfolio_config(path)
+
+    assert config.id == PORTFOLIO_SET_ID
+    assert config.symbols == PORTFOLIO_SYMBOLS
+    assert config.horizons_minutes == PORTFOLIO_HORIZONS
+    assert config.initial_capital_usd == 100_000.0
+    assert config.target_annual_volatility == 0.10
+    assert config.maximum_drawdown == 0.10

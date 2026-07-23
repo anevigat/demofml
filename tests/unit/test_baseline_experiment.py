@@ -110,6 +110,12 @@ def test_walk_forward_trains_only_on_purged_development_rows() -> None:
         == PREDICTION_SET_ID.encode()
     )
     assert predictions.column("realized_return")[0].as_py() > 0.0
+    assert predictions.column("entry_time")[0].as_py() == datetime(
+        2022, 1, 1, tzinfo=UTC
+    )
+    assert predictions.column("exit_time")[0].as_py() == datetime(
+        2022, 1, 1, 0, 15, tzinfo=UTC
+    )
 
 
 def test_future_validation_row_cannot_change_earlier_prediction() -> None:

@@ -71,7 +71,7 @@ def evaluate_predictions(predictions: pa.Table) -> dict[str, Any]:
         raise ValueError(f"prediction schema is missing {sorted(missing)}")
     metadata = predictions.schema.metadata or {}
     if metadata.get(b"demofml.prediction_set") != PREDICTION_SET_ID.encode():
-        raise ValueError("prediction metadata is not walk-forward-predictions-v1")
+        raise ValueError(f"prediction metadata is not {PREDICTION_SET_ID}")
     if predictions.num_rows == 0:
         raise ValueError("cannot evaluate empty predictions")
     rows = predictions.select(list(_REQUIRED_COLUMNS)).to_pylist()

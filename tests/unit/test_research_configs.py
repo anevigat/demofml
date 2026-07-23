@@ -8,6 +8,12 @@ from demofml.labels.executable import (
     LABEL_SET_ID,
     MAX_QUOTE_LATENCY_MINUTES,
 )
+from demofml.validation.splits import (
+    INTERVAL_SEMANTICS,
+    VALIDATION_SET_ID,
+    VALIDATION_STRATEGY,
+    load_validation_plan,
+)
 
 PROJECT_ROOT = Path(__file__).parents[2]
 
@@ -33,3 +39,17 @@ def test_label_config_matches_implementation() -> None:
     assert config["max_entry_latency_minutes"] == MAX_QUOTE_LATENCY_MINUTES
     assert config["max_exit_latency_minutes"] == MAX_QUOTE_LATENCY_MINUTES
     assert config["returns"]["short"] == "1 - exit_ask / entry_bid"
+
+
+def test_validation_config_matches_implementation() -> None:
+    path = PROJECT_ROOT / "configs/experiments/purged-walk-forward-v1.toml"
+    plan = load_validation_plan(path)
+
+    assert plan.id == VALIDATION_SET_ID
+    assert plan.strategy == VALIDATION_STRATEGY
+    assert plan.interval_semantics == INTERVAL_SEMANTICS
+    assert plan.max_horizon_minutes == max(DEFAULT_HORIZONS_MINUTES)
+    assert plan.max_quote_latency_minutes == MAX_QUOTE_LATENCY_MINUTES
+    assert plan.purge_minutes == (
+        max(DEFAULT_HORIZONS_MINUTES) + MAX_QUOTE_LATENCY_MINUTES
+    )

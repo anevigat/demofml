@@ -14,7 +14,8 @@ Generated research outputs belong below ignored directories such as
 
 Every significant change must preserve at least 80% branch coverage globally
 and 90% coverage individually for tick contracts, quote bars, causal features,
-and executable labels. Run the same gates enforced by CI before committing:
+executable labels, and temporal validation controls. Run the same gates enforced
+by CI before committing:
 
 ```bash
 coverage run -m pytest
@@ -23,7 +24,8 @@ for module in \
   src/demofml/data/ticks.py \
   src/demofml/bars/quotes.py \
   src/demofml/features/causal.py \
-  src/demofml/labels/executable.py; do
+  src/demofml/labels/executable.py \
+  src/demofml/validation/splits.py; do
   coverage report --include="$module" --fail-under=90
 done
 ```

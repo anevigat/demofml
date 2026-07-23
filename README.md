@@ -227,9 +227,36 @@ python scripts/build_labels.py \
 The immutable definitions are recorded in `configs/features/causal-v1.toml`
 and `configs/experiments/executable-labels-v1.toml`.
 
+## Purged Walk-Forward Validation
+
+Validation set `purged-walk-forward-v1` defines 36 monthly folds from January
+2022 through the end of the development period. Training starts in 2018 and
+expands for each fold. A 65-minute interval between training and validation
+covers the 60-minute maximum horizon plus the five-minute quote latency; rows
+inside that interval belong to neither side of the fold.
+
+All ranges are half-open UTC intervals. The locked test starts on 2025-01-01
+and its data interval ends on 2026-03-11, making 2026-03-10 the final covered
+UTC date. Development and locked-test decision cutoffs are shortened by 65
+minutes so no label reads quotes from outside its permitted interval.
+
+Build the deterministic split manifest without accessing market data:
+
+```bash
+python scripts/build_validation_splits.py \
+  --config configs/experiments/purged-walk-forward-v1.toml \
+  --output artifacts/validation/purged-walk-forward-v1.json
+```
+
+The implementation rejects random or overlapping folds, insufficient purges,
+non-UTC timestamps, and feature/label schemas whose version or information
+window differs from the validation plan. The locked test must not be inspected
+for model or feature selection.
+
 ## Status
 
-Phase 5 publication, Phase 6 bars, and Phase 7 features/labels in progress.
+Phase 5 publication is in progress. Phases 6-8 contracts and pipelines are
+implemented; full-data execution follows completion of the immutable upload.
 
 ## License
 

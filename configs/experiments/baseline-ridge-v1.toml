@@ -1,0 +1,33 @@
+id = "baseline-ridge-v1"
+feature_set = "causal-v1"
+label_set = "executable-v1"
+validation_set = "purged-walk-forward-v1"
+horizons_minutes = [15, 30, 60]
+training_scope = "per_symbol"
+model_type = "ridge"
+alpha = 1.0
+solver = "lsqr"
+imputation = "training_median"
+standardize = true
+action_threshold_bps = 0.0
+minimum_training_rows = 20
+random_seed = 1729
+locked_test_policy = "forbidden"
+
+features = [
+  "mid_return_1",
+  "mid_return_3",
+  "mid_return_12",
+  "realized_volatility_12",
+  "realized_volatility_72",
+  "spread_bps",
+  "spread_zscore_72",
+  "mid_range_bps",
+  "quote_count_log1p",
+  "staleness_seconds",
+  "elapsed_seconds",
+  "hour_sin",
+  "hour_cos",
+  "weekday_sin",
+  "weekday_cos",
+]

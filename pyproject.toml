@@ -13,7 +13,9 @@ license-files = ["LICENSE"]
 dependencies = [
   "boto3==1.43.51",
   "mlflow-skinny==3.14.0",
+  "numpy==2.5.1",
   "pyarrow==25.0.0",
+  "scikit-learn==1.9.0",
 ]
 
 [project.scripts]

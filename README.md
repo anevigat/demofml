@@ -314,10 +314,44 @@ The atomic output contains `ledger.parquet`, `equity.parquet`, and
 dimensionless executable returns to USD-normalized sleeve notional; it is not a
 broker-unit FX conversion ledger. Any locked-test prediction is rejected.
 
+## Resumable Development Pipeline
+
+Pipeline set `development-pipeline-v1` executes the complete development DAG:
+validation manifest, then bars, features, executable labels, an aligned temporal
+slice and ridge baseline for each symbol, followed by the eight-symbol portfolio.
+Every stage has a run fingerprint, output hashes, and a pre-build intent record.
+A repeated invocation verifies and skips completed stages; if a process stopped
+after atomically publishing output but before its checkpoint, the next invocation
+recovers that output instead of rebuilding it.
+
+Dataset set `cleaned-ticks-development-v1` pins 14 objects from the immutable
+source publication by path, size, row count, and SHA-256. It contains only the
+2018-2024 partitions. The runner waits for the source `manifest.json`, downloads
+only that allowlist, and scans every actual timestamp before reading prices. Any
+row outside `[2018-01-01, 2025-01-01)` is rejected. Features and labels are then
+sliced at `development_decision_end`, 65 minutes before the lock, so their full
+information windows remain outside the locked test.
+
+Run locally or inside the digest-pinned Kubernetes image:
+
+```bash
+export DEMOFML_IMAGE_DIGEST="sha256:<runtime-image-digest>"
+demofml run-development \
+  --pipeline-config configs/experiments/development-pipeline-v1.toml \
+  --workdir artifacts/runs
+```
+
+S3 and MLflow endpoints, buckets, and credentials come only from environment
+variables. The run identity binds the image digest and every referenced config.
+MLflow records provenance, portfolio metrics, per-symbol predictions and reports;
+raw ticks, generated features, labels, and credentials are never logged. A local
+file lock prevents concurrent processes from sharing one run directory.
+
 ## Status
 
-Phase 5 publication is in progress. Phases 6-10 contracts and pipelines are
-implemented; full-data execution follows completion of the immutable upload.
+Phase 5 publication is in progress. Phases 6-11 contracts and pipelines are
+implemented; full-data execution starts only after the immutable source manifest
+appears at the end of the upload.
 
 ## License
 

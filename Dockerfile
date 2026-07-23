@@ -26,6 +26,8 @@ COPY --from=builder /wheels /wheels
 RUN python -m pip install /wheels/*.whl \
     && rm -rf /wheels
 
+COPY configs/ /opt/demofml/configs/
+
 USER 10001:10001
 WORKDIR /home/demofml
 

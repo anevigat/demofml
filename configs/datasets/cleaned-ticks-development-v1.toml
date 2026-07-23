@@ -1,0 +1,105 @@
+format_version = 1
+id = "cleaned-ticks-development-v1"
+dataset_name = "cleaned_ticks"
+dataset_version = "sha256-859c55690d5ecf8d7a100d677e954c294bf7c83551c001efff967d9bbedc1455"
+s3_prefix = "curated"
+start = "2018-01-01T00:00:00Z"
+end_exclusive = "2025-01-01T00:00:00Z"
+
+[[files]]
+symbol = "AUDUSD"
+path = "AUDUSD/2018_2024/audusd_ticks_2018_2024.parquet"
+sha256 = "50a62df9eb19fbac3351624eba0ea1b7568b96fa5d5c8070379c8359655995b5"
+size_bytes = 1718177632
+rows = 135759131
+
+[[files]]
+symbol = "EURCHF"
+path = "EURCHF/2018_2024/eurchf_ticks_2018_2024.parquet"
+sha256 = "3f4f72d5ad781942407fe6054c7a590a0775d3f31ed766ac16e1d8e29f4f161e"
+size_bytes = 1697657825
+rows = 139202544
+
+[[files]]
+symbol = "EURJPY"
+path = "EURJPY/2018_2024/eurjpy_ticks_2018_2024.parquet"
+sha256 = "23816d6721867930fd1c15ea6fc872e43902fe3ad233c62a3b7b0d5c1b755bcd"
+size_bytes = 3926121737
+rows = 322065633
+
+[[files]]
+symbol = "EURUSD"
+path = "EURUSD/2018/eurusd_ticks_2018.parquet"
+sha256 = "f2ee94ddad6991662d78d488f6030f1d3b370a5b0206e61b5a8d2f6758ace477"
+size_bytes = 240229802
+rows = 26048775
+
+[[files]]
+symbol = "EURUSD"
+path = "EURUSD/2019/eurusd_ticks_2019.parquet"
+sha256 = "153e42a3ee78f91755ea18eac9d06e564a073f0f726b4c687988d4d328f97331"
+size_bytes = 245036601
+rows = 29186310
+
+[[files]]
+symbol = "EURUSD"
+path = "EURUSD/2020/eurusd_ticks_2020.parquet"
+sha256 = "e63c6680bad7c4ccbe817a84ce78808840a5eebd56b89dc07d228f19c82a2592"
+size_bytes = 299131045
+rows = 32763638
+
+[[files]]
+symbol = "EURUSD"
+path = "EURUSD/2021/eurusd_ticks_2021.parquet"
+sha256 = "ceb3e6fc384e3fba74b5e364c40a67c0dcff4610efa742aac11a2046fd4ea890"
+size_bytes = 161057456
+rows = 16797607
+
+[[files]]
+symbol = "EURUSD"
+path = "EURUSD/2022/eurusd_ticks_2022.parquet"
+sha256 = "213b186dc75798dc47d08bfb8ca3a4d93692b22d9439ef9076550515b7c40a58"
+size_bytes = 343295545
+rows = 36946763
+
+[[files]]
+symbol = "EURUSD"
+path = "EURUSD/2023/eurusd_ticks_2023.parquet"
+sha256 = "45fb63631f2e1da4b2484780ab1dfb610df18e2ce033368744215056a7ffe0c0"
+size_bytes = 248422602
+rows = 27545689
+
+[[files]]
+symbol = "EURUSD"
+path = "EURUSD/2024/eurusd_ticks_2024.parquet"
+sha256 = "0064c1f902766434707f77dfb7f16e2304b97eacb0a81b1ccd840dc00be76523"
+size_bytes = 186360303
+rows = 20686503
+
+[[files]]
+symbol = "GBPJPY"
+path = "GBPJPY/2018_2024/gbpjpy_ticks_2018_2024.parquet"
+sha256 = "8efe7a13153924d4b15446f35e2929324f570a11c33e509de0114b1ac58a466c"
+size_bytes = 3524651482
+rows = 275312602
+
+[[files]]
+symbol = "GBPUSD"
+path = "GBPUSD/2018_2024/gbpusd_ticks_2018_2024.parquet"
+sha256 = "8692585ad0bfa934d319da986c0cbbb57886873b37c942ac1a5ab999fe607291"
+size_bytes = 2643504244
+rows = 204412177
+
+[[files]]
+symbol = "USDCAD"
+path = "USDCAD/2018_2024/usdcad_ticks_2018_2024.parquet"
+sha256 = "05a7380513a4975a44b0d7c38258e139189456fc933d542edc46c8d277f2494c"
+size_bytes = 1990836215
+rows = 154806736
+
+[[files]]
+symbol = "USDJPY"
+path = "USDJPY/2018_2024/usdjpy_ticks_2018_2024.parquet"
+sha256 = "7eea6ccc93ef813c7692d968bdef95a604c42cc60cf1af57e776c114bc96b7ed"
+size_bytes = 2499408965
+rows = 203447687

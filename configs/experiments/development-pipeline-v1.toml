@@ -1,0 +1,12 @@
+format_version = 1
+id = "development-pipeline-v1"
+dataset_config = "../datasets/cleaned-ticks-development-v1.toml"
+feature_config = "../features/causal-v1.toml"
+label_config = "executable-labels-v1.toml"
+validation_config = "purged-walk-forward-v1.toml"
+model_config = "baseline-ridge-v1.toml"
+portfolio_config = "portfolio-v1.toml"
+symbols = ["AUDUSD", "EURCHF", "EURJPY", "EURUSD", "GBPJPY", "GBPUSD", "USDCAD", "USDJPY"]
+mlflow_experiment = "demofml-development-pipeline"
+locked_test_policy = "forbidden"
+resume_policy = "verified_stage_fingerprint"

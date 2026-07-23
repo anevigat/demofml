@@ -12,6 +12,7 @@ node selector and toleration.
 - A namespace-scoped ServiceAccount with API token mounting disabled.
 - A bootstrap Job that creates private buckets and a scoped application user.
 - A smoke Job that verifies S3 I/O and MLflow metric/artifact persistence.
+- A digest-pinned, resumable development pipeline with a dedicated 64 GiB PVC.
 - A TLS Ingress exposing only the MinIO S3 API on the internal network.
 
 ## Deploy
@@ -30,6 +31,27 @@ Inspect resources:
 ```bash
 kubectl get pods,services,pvc,jobs -n demofml
 ```
+
+## Development Pipeline
+
+The work PVC is separate from the Job so it can be created without starting the
+experiment. Create it at any time, but apply the Job only after the publisher has
+uploaded all 23 objects and the immutable source `manifest.json`:
+
+```bash
+kubectl apply -f infra/k8s/jobs/development-pipeline-pvc.yaml
+
+# Run only after publication reports 23/23 and a verified manifest location.
+kubectl apply -f infra/k8s/jobs/development-pipeline.yaml
+kubectl get job,pod,pvc -n demofml \
+  -l app.kubernetes.io/name=development-pipeline
+```
+
+The Job has no API token, uses only the `demofml` namespace, targets the dedicated
+worker, and pins both its image and experiment code identity to the same runtime
+digest. `backoffLimit: 0` prevents an automatic duplicate attempt. To resume after
+a failure, delete only the Job and apply it again; verified checkpoints remain on
+`demofml-development-work-v1`. Never delete that PVC during a retry.
 
 The private S3 Ingress is deliberately excluded from Kustomize so its hostname
 never appears in the public repository. Configure it locally:

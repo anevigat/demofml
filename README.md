@@ -281,9 +281,42 @@ not claim portfolio performance because overlapping-position accounting,
 position sizing, volatility targeting, and drawdown controls remain separate.
 The locked test remains forbidden until one development configuration is frozen.
 
+## Causal Portfolio Evaluation
+
+Portfolio set `normalized-sleeve-portfolio-v1` combines the canonical eight
+symbols and all three horizons as independent lots. Capital is split equally by
+symbol and horizon, then divided by `horizon / 5 minutes` to account for the
+scheduled overlap. This makes the fully invested steady-state gross allocation
+one before risk scaling. Missing symbol decisions are handled event-by-event;
+portfolio state continues across monthly fold boundaries.
+
+Sizing uses only returns recognized at actual executable `exit_time`. A trailing
+five-minute return window targets 10% annual volatility, uses 1x leverage during
+warm-up, and caps leverage at 2x. If settled equity reaches 10% drawdown, the
+engine permanently blocks new positions while allowing every open lot to settle.
+The trigger cannot guarantee drawdown remains exactly below 10% because exits
+can jump through the threshold and no intratrade mark-to-market data is available.
+
+Phase 9 prediction set `walk-forward-predictions-v2` includes actual entry and
+exit times for this accounting. Run the development portfolio after producing
+predictions for all eight symbols:
+
+```bash
+python scripts/run_portfolio_evaluation.py \
+  --predictions artifacts/experiments/*/baseline-ridge-v1/predictions.parquet \
+  --portfolio-config configs/experiments/portfolio-v1.toml \
+  --validation-config configs/experiments/purged-walk-forward-v1.toml \
+  --output artifacts/portfolio/normalized-sleeve-portfolio-v1
+```
+
+The atomic output contains `ledger.parquet`, `equity.parquet`, and
+`metrics.json`, including attribution by symbol, horizon, and fold. P&L applies
+dimensionless executable returns to USD-normalized sleeve notional; it is not a
+broker-unit FX conversion ledger. Any locked-test prediction is rejected.
+
 ## Status
 
-Phase 5 publication is in progress. Phases 6-9 contracts and pipelines are
+Phase 5 publication is in progress. Phases 6-10 contracts and pipelines are
 implemented; full-data execution follows completion of the immutable upload.
 
 ## License

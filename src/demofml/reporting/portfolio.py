@@ -8,13 +8,14 @@ import math
 import os
 import shutil
 import uuid
-from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pyarrow as pa  # type: ignore[import-untyped]
+import pyarrow.compute as pc  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
 from demofml.evaluation.portfolio import (
@@ -35,23 +36,24 @@ class PortfolioBuildResult:
     final_equity_usd: float
 
 
-def _attribution(rows: list[dict[str, object]], field: str) -> list[dict[str, Any]]:
-    grouped: dict[str | int, list[dict[str, object]]] = defaultdict(list)
-    for row in rows:
-        key = row[field]
-        if not isinstance(key, str | int):
-            raise ValueError(f"ledger attribution field {field} is invalid")
-        grouped[key].append(row)
+def _attribution(ledger: pa.Table, field: str) -> list[dict[str, Any]]:
+    if ledger.num_rows == 0:
+        return []
+    winners = pc.cast(pc.greater(ledger.column("pnl_usd"), 0.0), pa.int64())
+    source = ledger.select([field, "pnl_usd"]).append_column("_winner", winners)
+    grouped = source.group_by(field).aggregate(
+        [("pnl_usd", "count"), ("pnl_usd", "sum"), ("_winner", "sum")]
+    )
     result: list[dict[str, Any]] = []
-    for key in sorted(grouped, key=str):
-        group = grouped[key]
-        pnl = [float(row["pnl_usd"]) for row in group]  # type: ignore[arg-type]
+    for row in sorted(grouped.to_pylist(), key=lambda value: str(value[field])):
+        key = row[field]
+        trades = int(row["pnl_usd_count"])
         result.append(
             {
                 field: key,
-                "trades": len(group),
-                "pnl_usd": sum(pnl),
-                "win_rate": sum(value > 0.0 for value in pnl) / len(pnl),
+                "trades": trades,
+                "pnl_usd": float(row["pnl_usd_sum"]),
+                "win_rate": int(row["_winner_sum"]) / trades,
             }
         )
     return result
@@ -65,7 +67,7 @@ def portfolio_report(
     equity_rows = simulation.equity.to_pylist()
     if not equity_rows:
         raise ValueError("portfolio equity path cannot be empty")
-    ledger_rows = simulation.ledger.to_pylist()
+    ledger = simulation.ledger
     final_equity = float(equity_rows[-1]["equity_usd"])
     drawdowns = [float(row["drawdown"]) for row in equity_rows]
     period_returns = np.asarray(simulation.period_returns, dtype=float)
@@ -84,7 +86,7 @@ def portfolio_report(
         "initial_capital_usd": config.initial_capital_usd,
         "final_equity_usd": final_equity,
         "total_return": final_equity / config.initial_capital_usd - 1.0,
-        "trades": len(ledger_rows),
+        "trades": ledger.num_rows,
         "suppressed_signals": simulation.suppressed_signals,
         "maximum_active_positions": simulation.maximum_active_positions,
         "maximum_gross_leverage": simulation.maximum_gross_leverage,
@@ -94,9 +96,9 @@ def portfolio_report(
         "drawdown_limit": config.maximum_drawdown,
         "drawdown_halt_triggered": any(bool(row["halted"]) for row in equity_rows),
         "attribution": {
-            "symbols": _attribution(ledger_rows, "symbol"),
-            "horizons": _attribution(ledger_rows, "horizon_minutes"),
-            "folds": _attribution(ledger_rows, "fold_id"),
+            "symbols": _attribution(ledger, "symbol"),
+            "horizons": _attribution(ledger, "horizon_minutes"),
+            "folds": _attribution(ledger, "fold_id"),
         },
         "always_flat_comparator": {
             "final_equity_usd": config.initial_capital_usd,
@@ -132,7 +134,7 @@ def run_portfolio_evaluation(
     plan = load_validation_plan(validation_config_path)
     if plan.id != config.validation_set:
         raise ValueError("portfolio and temporal validation sets differ")
-    tables = [pq.read_table(path) for path in paths]
+    tables = (pq.read_table(path) for path in paths)
     simulation = simulate_portfolio(tables, config, plan.locked_test_start)
     report = portfolio_report(simulation, config)
 

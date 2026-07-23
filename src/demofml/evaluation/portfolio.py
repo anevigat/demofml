@@ -6,7 +6,7 @@ import heapq
 import math
 import tomllib
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -159,6 +159,18 @@ class _Lot:
     base_weight: float
     risk_leverage: float
     notional_usd: float
+    realized_return: float
+
+
+@dataclass(frozen=True, slots=True)
+class _Prediction:
+    fold_id: str
+    symbol: str
+    decision_time: datetime
+    entry_time: datetime
+    exit_time: datetime
+    horizon_minutes: int
+    action: str
     realized_return: float
 
 
@@ -352,99 +364,116 @@ def _integer(value: object, name: str) -> int:
 
 
 def _prediction_rows(
-    tables: Sequence[pa.Table],
+    tables: Iterable[pa.Table],
     config: PortfolioConfig,
     locked_test_start: datetime,
-) -> list[dict[str, object]]:
-    if not tables:
-        raise ValueError("at least one prediction table is required")
-    rows: list[dict[str, object]] = []
-    for table in tables:
-        _validate_prediction_schema(table, config)
-        rows.extend(table.select(list(_PREDICTION_FIELDS)).to_pylist())
-    if not rows:
-        raise ValueError("portfolio predictions cannot be empty")
-
+) -> list[_Prediction]:
+    rows: list[_Prediction] = []
     symbols: set[str] = set()
     horizons: set[int] = set()
-    keys: set[tuple[str, datetime, int]] = set()
-    for row in rows:
-        symbol = str(row["symbol"])
-        model_set = str(row["model_set"])
-        validation_set = str(row["validation_set"])
-        fold_id = str(row["fold_id"])
-        action = str(row["action"])
-        horizon = _integer(row["horizon_minutes"], "horizon_minutes")
-        decision_time = row["decision_time"]
-        entry_time = row["entry_time"]
-        exit_time = row["exit_time"]
-        if symbol not in config.symbols or not fold_id:
-            raise ValueError("prediction symbol or fold is invalid")
-        if model_set != config.model_set or validation_set != config.validation_set:
-            raise ValueError("prediction row provenance is incompatible")
-        if horizon not in config.horizons_minutes or action not in _ACTIONS:
-            raise ValueError("prediction horizon or action is invalid")
-        if not all(
-            isinstance(value, datetime)
-            for value in (decision_time, entry_time, exit_time)
-        ):
-            raise ValueError("prediction execution timestamps cannot be null")
-        if not isinstance(decision_time, datetime):
-            raise ValueError("decision_time cannot be null")
-        if not isinstance(entry_time, datetime) or not isinstance(exit_time, datetime):
-            raise ValueError("execution times cannot be null")
-        if decision_time >= locked_test_start or exit_time >= locked_test_start:
-            raise ValueError("locked-test predictions are forbidden")
-        entry_deadline = decision_time + timedelta(minutes=MAX_QUOTE_LATENCY_MINUTES)
-        exit_target = decision_time + timedelta(minutes=horizon)
-        exit_deadline = exit_target + timedelta(minutes=MAX_QUOTE_LATENCY_MINUTES)
-        if not decision_time <= entry_time <= entry_deadline:
-            raise ValueError("prediction entry_time violates executable latency")
-        if not exit_target <= exit_time <= exit_deadline:
-            raise ValueError("prediction exit_time violates executable latency")
-        realized_return = row["realized_return"]
-        if not isinstance(realized_return, int | float) or not math.isfinite(
-            realized_return
-        ):
-            raise ValueError("prediction realized_return must be finite")
-        for name in ("predicted_long_return", "predicted_short_return"):
-            prediction = row[name]
-            if not isinstance(prediction, int | float) or not math.isfinite(
-                prediction
+    table_count = 0
+    for table in tables:
+        table_count += 1
+        _validate_prediction_schema(table, config)
+        for row in table.select(list(_PREDICTION_FIELDS)).to_pylist():
+            symbol = str(row["symbol"])
+            model_set = str(row["model_set"])
+            validation_set = str(row["validation_set"])
+            fold_id = str(row["fold_id"])
+            action = str(row["action"])
+            horizon = _integer(row["horizon_minutes"], "horizon_minutes")
+            decision_time = row["decision_time"]
+            entry_time = row["entry_time"]
+            exit_time = row["exit_time"]
+            if symbol not in config.symbols or not fold_id:
+                raise ValueError("prediction symbol or fold is invalid")
+            if model_set != config.model_set or validation_set != config.validation_set:
+                raise ValueError("prediction row provenance is incompatible")
+            if horizon not in config.horizons_minutes or action not in _ACTIONS:
+                raise ValueError("prediction horizon or action is invalid")
+            if not all(
+                isinstance(value, datetime)
+                for value in (decision_time, entry_time, exit_time)
             ):
-                raise ValueError(f"{name} must be finite")
-        if action == "flat" and realized_return != 0.0:
-            raise ValueError("flat predictions must have zero realized_return")
-        key = (symbol, decision_time, horizon)
-        if key in keys:
-            raise ValueError("duplicate portfolio prediction key")
-        keys.add(key)
-        symbols.add(symbol)
-        horizons.add(horizon)
+                raise ValueError("prediction execution timestamps cannot be null")
+            if not isinstance(decision_time, datetime):
+                raise ValueError("decision_time cannot be null")
+            if not isinstance(entry_time, datetime) or not isinstance(
+                exit_time, datetime
+            ):
+                raise ValueError("execution times cannot be null")
+            if decision_time >= locked_test_start or exit_time >= locked_test_start:
+                raise ValueError("locked-test predictions are forbidden")
+            entry_deadline = decision_time + timedelta(
+                minutes=MAX_QUOTE_LATENCY_MINUTES
+            )
+            exit_target = decision_time + timedelta(minutes=horizon)
+            exit_deadline = exit_target + timedelta(
+                minutes=MAX_QUOTE_LATENCY_MINUTES
+            )
+            if not decision_time <= entry_time <= entry_deadline:
+                raise ValueError("prediction entry_time violates executable latency")
+            if not exit_target <= exit_time <= exit_deadline:
+                raise ValueError("prediction exit_time violates executable latency")
+            realized_return = row["realized_return"]
+            if not isinstance(realized_return, int | float) or not math.isfinite(
+                realized_return
+            ):
+                raise ValueError("prediction realized_return must be finite")
+            for name in ("predicted_long_return", "predicted_short_return"):
+                prediction = row[name]
+                if not isinstance(prediction, int | float) or not math.isfinite(
+                    prediction
+                ):
+                    raise ValueError(f"{name} must be finite")
+            if action == "flat" and realized_return != 0.0:
+                raise ValueError("flat predictions must have zero realized_return")
+            rows.append(
+                _Prediction(
+                    fold_id,
+                    symbol,
+                    decision_time,
+                    entry_time,
+                    exit_time,
+                    horizon,
+                    action,
+                    float(realized_return),
+                )
+            )
+            symbols.add(symbol)
+            horizons.add(horizon)
+    if table_count == 0:
+        raise ValueError("at least one prediction table is required")
+    if not rows:
+        raise ValueError("portfolio predictions cannot be empty")
     if symbols != set(config.symbols):
         raise ValueError("predictions do not cover the canonical symbol universe")
     if horizons != set(config.horizons_minutes):
         raise ValueError("predictions do not cover every portfolio horizon")
     rows.sort(
         key=lambda row: (
-            row["decision_time"],
-            str(row["symbol"]),
-            _integer(row["horizon_minutes"], "horizon_minutes"),
+            row.decision_time,
+            row.symbol,
+            row.horizon_minutes,
         )
     )
+    previous_key: tuple[str, datetime, int] | None = None
+    for row in rows:
+        key = (row.symbol, row.decision_time, row.horizon_minutes)
+        if key == previous_key:
+            raise ValueError("duplicate portfolio prediction key")
+        previous_key = key
     return rows
 
 
 def simulate_portfolio(
-    prediction_tables: Sequence[pa.Table],
+    prediction_tables: Iterable[pa.Table],
     config: PortfolioConfig,
     locked_test_start: datetime,
 ) -> PortfolioSimulation:
     """Settle independent lots with causal sizing and permanent drawdown halt."""
-    rows = _prediction_rows(prediction_tables, config, locked_test_start)
-    first_time = rows[0]["decision_time"]
-    if not isinstance(first_time, datetime):
-        raise ValueError("first prediction time is invalid")
+    rows = deque(_prediction_rows(prediction_tables, config, locked_test_start))
+    first_time = rows[0].decision_time
 
     equity = config.initial_capital_usd
     running_peak = equity
@@ -558,46 +587,33 @@ def simulate_portfolio(
             if next_exit == event_time:
                 settle(event_time)
 
-    index = 0
-    while index < len(rows):
-        decision_time = rows[index]["decision_time"]
-        if not isinstance(decision_time, datetime):
-            raise ValueError("decision_time cannot be null")
+    while rows:
+        decision_time = rows[0].decision_time
         process_until(decision_time)
         volatility.advance(decision_time)
-        group_end = index + 1
-        while (
-            group_end < len(rows) and rows[group_end]["decision_time"] == decision_time
-        ):
-            group_end += 1
-        decision_rows = rows[index:group_end]
+        decision_rows: list[_Prediction] = []
+        while rows and rows[0].decision_time == decision_time:
+            decision_rows.append(rows.popleft())
         if halted:
             suppressed_signals += sum(
-                str(row["action"]) != "flat" for row in decision_rows
+                row.action != "flat" for row in decision_rows
             )
-            index = group_end
             continue
         risk_leverage = volatility.leverage
         for row in decision_rows:
-            action = str(row["action"])
+            action = row.action
             if action == "flat":
                 continue
-            horizon = _integer(row["horizon_minutes"], "horizon_minutes")
-            entry_time = row["entry_time"]
-            exit_time = row["exit_time"]
-            realized_return = row["realized_return"]
-            if not isinstance(entry_time, datetime) or not isinstance(
-                exit_time, datetime
-            ):
-                raise ValueError("execution times cannot be null")
-            if not isinstance(realized_return, int | float):
-                raise ValueError("realized_return must be numeric")
+            horizon = row.horizon_minutes
+            entry_time = row.entry_time
+            exit_time = row.exit_time
+            realized_return = row.realized_return
             base_weight = config.lot_weight(horizon)
             notional_usd = max(equity, 0.0) * base_weight * risk_leverage
             lot = _Lot(
                 sequence=sequence,
-                fold_id=str(row["fold_id"]),
-                symbol=str(row["symbol"]),
+                fold_id=row.fold_id,
+                symbol=row.symbol,
                 decision_time=decision_time,
                 entry_time=entry_time,
                 exit_time=exit_time,
@@ -606,11 +622,10 @@ def simulate_portfolio(
                 base_weight=base_weight,
                 risk_leverage=risk_leverage,
                 notional_usd=notional_usd,
-                realized_return=float(realized_return),
+                realized_return=realized_return,
             )
             heapq.heappush(pending_entries, (entry_time, sequence, lot))
             sequence += 1
-        index = group_end
 
     process_until(None)
     volatility.finish()

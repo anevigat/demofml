@@ -29,13 +29,32 @@ QUOTE_BAR_SCHEMA = pa.schema(
         pa.field("spread_mean", pa.float64(), nullable=False),
         pa.field("quote_count", pa.int64(), nullable=False),
         pa.field("staleness_ns", pa.int64(), nullable=False),
-    ]
+    ],
+    metadata={
+        b"demofml.bar_set": b"quote-bars-v1",
+        b"demofml.interval_minutes": b"5",
+    },
 )
 
 
 def empty_quote_bars() -> pa.Table:
     """Return an empty table with the canonical quote-bar schema."""
     return pa.Table.from_batches([], schema=QUOTE_BAR_SCHEMA)
+
+
+def validate_quote_bar_schema(schema: pa.Schema) -> None:
+    """Validate the physical columns required by downstream research stages."""
+    if schema.names != QUOTE_BAR_SCHEMA.names:
+        raise ValueError("quote-bar columns do not match quote-bars-v1")
+    for expected in QUOTE_BAR_SCHEMA:
+        actual = schema.field(expected.name)
+        if actual.type != expected.type or actual.nullable != expected.nullable:
+            raise ValueError(f"invalid quote-bar type for {expected.name}")
+    metadata = schema.metadata or {}
+    if metadata.get(b"demofml.bar_set") != b"quote-bars-v1":
+        raise ValueError("quote-bar metadata does not identify quote-bars-v1")
+    if metadata.get(b"demofml.interval_minutes") != b"5":
+        raise ValueError("quote-bars-v1 requires a five-minute interval")
 
 
 def _bucket_start(timestamp: pa.Array | pa.ChunkedArray, minutes: int) -> pa.Array:
@@ -48,8 +67,8 @@ def aggregate_quote_bars(
     interval_minutes: int = 5,
 ) -> pa.Table:
     """Aggregate sorted ticks into half-open bars labelled by their end time."""
-    if interval_minutes <= 0:
-        raise ValueError("interval_minutes must be positive")
+    if interval_minutes != 5:
+        raise ValueError("quote-bars-v1 requires interval_minutes=5")
     canonical = canonicalize_ticks(ticks)
     if canonical.num_rows == 0:
         return empty_quote_bars()
@@ -124,8 +143,8 @@ class QuoteBarBuilder:
     """Retain only the open final bar while consuming ordered tick batches."""
 
     def __init__(self, symbol: str, interval_minutes: int = 5) -> None:
-        if interval_minutes <= 0:
-            raise ValueError("interval_minutes must be positive")
+        if interval_minutes != 5:
+            raise ValueError("quote-bars-v1 requires interval_minutes=5")
         self._symbol = symbol
         self._interval_minutes = interval_minutes
         self._carry: pa.Table | None = None

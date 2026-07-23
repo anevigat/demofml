@@ -156,6 +156,27 @@ def run_portfolio_evaluation(
             use_dictionary=True,
             write_statistics=True,
         )
+        period_returns = pa.table(
+            {
+                "period_index": pa.array(
+                    range(len(simulation.period_returns)), type=pa.int64()
+                ),
+                "portfolio_return": pa.array(
+                    simulation.period_returns, type=pa.float64()
+                ),
+            }
+        ).replace_schema_metadata(
+            {
+                b"demofml.portfolio_set": config.id.encode(),
+                b"demofml.return_frequency": b"observed_five_minute_period",
+            }
+        )
+        pq.write_table(
+            period_returns,
+            partial / "period-returns.parquet",
+            compression="zstd",
+            write_statistics=True,
+        )
         (partial / "metrics.json").write_text(
             json.dumps(report, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",

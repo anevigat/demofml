@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
+import pytest
 
 from demofml.bars.quotes import aggregate_quote_bars
 from demofml.features.build import build_features
@@ -99,3 +100,40 @@ def test_feature_windows_reset_after_missing_bars() -> None:
     assert features.column("mid_return_1")[15].as_py() is None
     assert features.column("mid_return_12")[15].as_py() is None
     assert features.column("realized_volatility_12")[15].as_py() is None
+
+
+def test_feature_builder_rejects_invalid_bar_inputs() -> None:
+    bars = _bars(3)
+    builder = CausalFeatureBuilder("EURUSD")
+    assert builder.push(bars.slice(0, 0)).num_rows == 0
+
+    wrong_symbol_rows = bars.slice(0, 1).to_pylist()
+    wrong_symbol_rows[0]["symbol"] = "GBPUSD"
+    wrong_symbol = pa.Table.from_pylist(wrong_symbol_rows, schema=bars.schema)
+    with pytest.raises(ValueError, match="Expected symbol"):
+        builder.push(wrong_symbol)
+
+    invalid_rows = bars.slice(0, 1).to_pylist()
+    invalid_rows[0]["mid_close"] = float("nan")
+    invalid = pa.Table.from_pylist(invalid_rows, schema=bars.schema)
+    with pytest.raises(ValueError, match="finite"):
+        CausalFeatureBuilder("EURUSD").push(invalid)
+
+    with pytest.raises(ValueError, match="strictly ordered"):
+        CausalFeatureBuilder("EURUSD").push(pa.concat_tables([bars, bars]))
+
+    with pytest.raises(ValueError, match="columns"):
+        CausalFeatureBuilder("EURUSD").push(bars.drop(["spread_mean"]))
+
+
+def test_constant_spread_has_zero_zscore_after_warmup() -> None:
+    bars = _bars(72)
+    rows = bars.to_pylist()
+    for row in rows:
+        row["mid_high"] = 1.0
+        row["mid_low"] = 1.0
+        row["mid_close"] = 1.0
+        row["spread_close"] = 0.0001
+    constant_spread = pa.Table.from_pylist(rows, schema=bars.schema)
+    features = CausalFeatureBuilder("EURUSD").push(constant_spread)
+    assert features.column("spread_zscore_72")[71].as_py() == 0.0

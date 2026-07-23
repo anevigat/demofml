@@ -22,3 +22,14 @@ def test_cli_delegates_development_arguments(monkeypatch: pytest.MonkeyPatch) ->
     main(["run-development", "--workdir", "/work"])
 
     assert received == [["--workdir", "/work"]]
+
+
+def test_cli_delegates_acceptance_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
+    received: list[list[str] | None] = []
+    monkeypatch.setattr(
+        "demofml.reporting.acceptance.main", lambda argv: received.append(argv)
+    )
+
+    main(["evaluate-development", "--run-root", "/work/run"])
+
+    assert received == [["--run-root", "/work/run"]]

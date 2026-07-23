@@ -366,6 +366,7 @@ def test_portfolio_artifacts_are_published_atomically(tmp_path: Path) -> None:
     assert result.final_equity_usd > 100_000.0
     assert pq.read_table(output / "ledger.parquet").num_rows == 72
     assert pq.read_table(output / "equity.parquet").num_rows > 1
+    assert pq.read_table(output / "period-returns.parquet").num_rows > 1
     assert json.loads((output / "metrics.json").read_text())["format_version"] == 1
     assert not list(tmp_path.glob("*.partial"))
     with pytest.raises(RuntimeError, match="Refusing to replace"):

@@ -1,0 +1,30 @@
+format_version = 1
+id = "development-acceptance-v1"
+pipeline_set = "development-pipeline-v2"
+dataset_set = "cleaned-ticks-development-v1"
+validation_set = "purged-walk-forward-v1"
+model_set = "baseline-ridge-v1"
+portfolio_set = "normalized-sleeve-portfolio-v1"
+portfolio_config = "portfolio-v1.toml"
+symbols = ["AUDUSD", "EURCHF", "EURJPY", "EURUSD", "GBPJPY", "GBPUSD", "USDCAD", "USDJPY"]
+horizons_minutes = [15, 30, 60]
+expected_fold_count = 36
+expected_stage_count = 42
+expected_authorized_files = 14
+expected_source_rows = 1624981795
+locked_test_policy = "forbidden"
+
+[model]
+minimum_positive_folds_per_horizon = 24
+minimum_positive_symbols_per_horizon = 6
+minimum_trades_per_symbol_horizon = 100
+minimum_mean_executable_return_bps_exclusive = 0.0
+
+[portfolio]
+minimum_total_return_exclusive = 0.0
+maximum_drawdown_exclusive = 0.10
+minimum_realized_annual_volatility = 0.075
+maximum_realized_annual_volatility = 0.125
+maximum_gross_leverage = 2.0
+require_no_drawdown_halt = true
+reconciliation_tolerance_usd = 0.01

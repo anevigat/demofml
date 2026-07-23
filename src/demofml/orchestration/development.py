@@ -9,15 +9,19 @@ import json
 import math
 import os
 import re
+import resource
+import sys
+import time
 import tomllib
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any
 
+import pyarrow.parquet as pq  # type: ignore[import-untyped]
 from botocore.exceptions import ClientError  # type: ignore[import-untyped]
 from mlflow import MlflowClient
 
@@ -42,12 +46,19 @@ from demofml.labels.executable import (
 )
 from demofml.models.baseline import load_baseline_config
 from demofml.models.build import run_baseline_experiment
+from demofml.reporting.acceptance import (
+    load_acceptance_config,
+    publish_acceptance_report,
+)
 from demofml.reporting.portfolio import run_portfolio_evaluation
 from demofml.validation.build import build_validation_manifest
 from demofml.validation.development import isolate_development_rows
 from demofml.validation.splits import load_validation_plan
 
-PIPELINE_SET_ID = "development-pipeline-v1"
+PIPELINE_SET_ID = "development-pipeline-v2"
+_SUPPORTED_PIPELINE_SETS = frozenset(
+    {"development-pipeline-v1", PIPELINE_SET_ID}
+)
 _CODE_REFERENCE_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _HASH_BLOCK_SIZE = 8 * 1024 * 1024
 
@@ -63,6 +74,7 @@ class PipelineConfig:
     validation_config: Path
     model_config: Path
     portfolio_config: Path
+    acceptance_config: Path | None
     symbols: tuple[str, ...]
     mlflow_experiment: str
     locked_test_policy: str
@@ -71,13 +83,18 @@ class PipelineConfig:
     @property
     def referenced_configs(self) -> tuple[Path, ...]:
         """Return every file that contributes to the run identity."""
-        return (
+        configs = (
             self.dataset_config,
             self.feature_config,
             self.label_config,
             self.validation_config,
             self.model_config,
             self.portfolio_config,
+        )
+        return (
+            configs
+            if self.acceptance_config is None
+            else (*configs, self.acceptance_config)
         )
 
 
@@ -88,6 +105,20 @@ class PipelineRunResult:
     run_id: str
     mlflow_run_id: str
     output: Path
+
+
+@dataclass(frozen=True)
+class StageExecution:
+    """Durable measurements for one stage action in the current attempt."""
+
+    stage: str
+    symbol: str | None
+    action: str
+    resumed: bool
+    elapsed_ns: int
+    build_elapsed_ns: int | None
+    peak_rss_bytes_at_end: int
+    outputs: tuple[dict[str, object], ...]
 
 
 def _config_path(parent: Path, value: object, field: str) -> Path:
@@ -109,8 +140,15 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
     try:
         if int(values["format_version"]) != 1:
             raise ValueError("pipeline format_version must be 1")
+        pipeline_id = str(values["id"])
+        acceptance_value = values.get("acceptance_config")
+        acceptance_config = (
+            _config_path(path.parent, acceptance_value, "acceptance_config")
+            if acceptance_value is not None
+            else None
+        )
         config = PipelineConfig(
-            id=str(values["id"]),
+            id=pipeline_id,
             dataset_config=_config_path(
                 path.parent, values["dataset_config"], "dataset_config"
             ),
@@ -129,6 +167,7 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
             portfolio_config=_config_path(
                 path.parent, values["portfolio_config"], "portfolio_config"
             ),
+            acceptance_config=acceptance_config,
             symbols=tuple(str(value) for value in values["symbols"]),
             mlflow_experiment=str(values["mlflow_experiment"]),
             locked_test_policy=str(values["locked_test_policy"]),
@@ -136,8 +175,12 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
         )
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError(f"invalid pipeline config field: {error}") from error
-    if config.id != PIPELINE_SET_ID:
-        raise ValueError(f"pipeline id must be {PIPELINE_SET_ID}")
+    if config.id not in _SUPPORTED_PIPELINE_SETS:
+        raise ValueError("pipeline id is not supported")
+    if config.id == PIPELINE_SET_ID and config.acceptance_config is None:
+        raise ValueError("development-pipeline-v2 requires an acceptance config")
+    if config.id == "development-pipeline-v1" and config.acceptance_config is not None:
+        raise ValueError("development-pipeline-v1 cannot define acceptance")
     if not config.symbols or tuple(sorted(set(config.symbols))) != config.symbols:
         raise ValueError("pipeline symbols must be unique and ordered")
     if not config.mlflow_experiment:
@@ -160,10 +203,21 @@ def _validate_contracts(
     plan = load_validation_plan(config.validation_config)
     model = load_baseline_config(config.model_config)
     portfolio = load_portfolio_config(config.portfolio_config)
+    acceptance = (
+        load_acceptance_config(config.acceptance_config)
+        if config.acceptance_config is not None
+        else None
+    )
     features = _load_toml(config.feature_config)
     labels = _load_toml(config.label_config)
     if dataset.symbols != config.symbols or portfolio.symbols != config.symbols:
         raise ValueError("pipeline, dataset, and portfolio symbols differ")
+    if acceptance is not None and (
+        acceptance.pipeline_set != config.id
+        or acceptance.symbols != config.symbols
+        or acceptance.horizons_minutes != portfolio.horizons_minutes
+    ):
+        raise ValueError("pipeline acceptance contract is incompatible")
     if (
         dataset.start != plan.train_start
         or dataset.end_exclusive != plan.locked_test_start
@@ -225,19 +279,15 @@ def _file_sha256(path: Path) -> str:
 def _run_id(config_path: Path, config: PipelineConfig, code_reference: str) -> str:
     if not _CODE_REFERENCE_PATTERN.fullmatch(code_reference):
         raise ValueError("code reference must be an immutable sha256 image digest")
+    roles = ["dataset", "features", "labels", "validation", "model", "portfolio"]
+    if config.acceptance_config is not None:
+        roles.append("acceptance")
     identity = {
         "pipeline_config_sha256": _file_sha256(config_path),
         "referenced_configs": [
             {"role": role, "sha256": _file_sha256(path)}
             for role, path in zip(
-                (
-                    "dataset",
-                    "features",
-                    "labels",
-                    "validation",
-                    "model",
-                    "portfolio",
-                ),
+                roles,
                 config.referenced_configs,
                 strict=True,
             )
@@ -261,6 +311,31 @@ def _output_records(outputs: Sequence[Path], root: Path) -> list[dict[str, objec
             }
         )
     return records
+
+
+def _peak_rss_bytes() -> int:
+    value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return value if sys.platform == "darwin" else value * 1024
+
+
+def _output_measurements(
+    outputs: Sequence[Path], root: Path
+) -> tuple[dict[str, object], ...]:
+    measurements: list[dict[str, object]] = []
+    for output in outputs:
+        rows = (
+            pq.read_metadata(output).num_rows
+            if output.suffix == ".parquet"
+            else None
+        )
+        measurements.append(
+            {
+                "path": output.relative_to(root).as_posix(),
+                "size_bytes": output.stat().st_size,
+                "rows": rows,
+            }
+        )
+    return tuple(measurements)
 
 
 def _read_json_object(path: Path, description: str) -> dict[str, Any]:
@@ -322,14 +397,39 @@ def _run_stage(
     fingerprint: str,
     outputs: Sequence[Path],
     build: Callable[[], object],
+    *,
+    stage: str = "unspecified",
+    symbol: str | None = None,
+    executions: list[StageExecution] | None = None,
 ) -> None:
+    started = time.perf_counter_ns()
+
+    def record_execution(
+        action: str, resumed: bool, build_elapsed_ns: int | None = None
+    ) -> None:
+        if executions is not None:
+            executions.append(
+                StageExecution(
+                    stage,
+                    symbol,
+                    action,
+                    resumed,
+                    time.perf_counter_ns() - started,
+                    build_elapsed_ns,
+                    _peak_rss_bytes(),
+                    _output_measurements(outputs, root),
+                )
+            )
+
     if _stage_is_complete(marker, fingerprint, outputs, root):
         print(f"verified; skipping stage {marker.stem}", flush=True)
+        record_execution("verified_skipped", True)
         return
     intent = marker.with_name(f"{marker.name}.intent")
-    if intent.exists():
-        record = _read_json_object(intent, "Stage intent")
-        if record.get("fingerprint") != fingerprint:
+    resumed = intent.exists()
+    if resumed:
+        intent_record = _read_json_object(intent, "Stage intent")
+        if intent_record.get("fingerprint") != fingerprint:
             raise RuntimeError(f"Stage intent fingerprint differs: {intent}")
     else:
         _write_json_no_replace(
@@ -339,6 +439,7 @@ def _run_stage(
     if any(existing):
         if not all(existing):
             raise RuntimeError(f"Stage outputs are incomplete: {marker}")
+        _output_measurements(outputs, root)
         _write_json_no_replace(
             marker,
             {
@@ -348,8 +449,11 @@ def _run_stage(
             },
         )
         print(f"recovered stage {marker.stem}", flush=True)
+        record_execution("checkpoint_recovered", True)
         return
+    build_started = time.perf_counter_ns()
     build()
+    build_elapsed_ns = time.perf_counter_ns() - build_started
     _write_json_no_replace(
         marker,
         {
@@ -358,6 +462,7 @@ def _run_stage(
             "outputs": _output_records(outputs, root),
         },
     )
+    record_execution("executed", resumed, build_elapsed_ns)
 
 
 def _stage_fingerprint(run_id: str, stage: str, symbol: str | None = None) -> str:
@@ -384,7 +489,7 @@ def _create_tracking_run(
     tracked = client.create_run(
         experiment_id,
         tags={
-            "component": "phase-11",
+            "component": "phase-12",
             "pipeline_set": config.id,
             "pipeline_run_id": run_id,
             "development_only": "true",
@@ -461,11 +566,20 @@ def _log_artifacts(
             str(baseline / "predictions.parquet"),
             f"symbols/{symbol}",
         )
-    for name in ("metrics.json", "ledger.parquet", "equity.parquet"):
+    for name in (
+        "metrics.json",
+        "ledger.parquet",
+        "equity.parquet",
+        "period-returns.parquet",
+    ):
         client.log_artifact(
             mlflow_run_id, str(root / "portfolio" / name), "portfolio"
         )
     client.log_artifact(mlflow_run_id, str(root / "run.json"))
+    client.log_artifact(mlflow_run_id, str(root / "execution-report.json"))
+    acceptance = root / "acceptance" / "development-acceptance-v1.json"
+    if acceptance.is_file():
+        client.log_artifact(mlflow_run_id, str(acceptance), "acceptance")
 
 
 def _log_metrics(client: Any, mlflow_run_id: str, root: Path) -> None:
@@ -483,6 +597,27 @@ def _log_metrics(client: Any, mlflow_run_id: str, root: Path) -> None:
         if not math.isfinite(value):
             raise RuntimeError(f"Portfolio metric is not finite: {name}")
         client.log_metric(mlflow_run_id, name, value)
+    execution = _read_json_object(root / "execution-report.json", "Execution report")
+    client.log_metric(
+        mlflow_run_id,
+        "compute_elapsed_seconds",
+        float(execution["compute_elapsed_ns"]) / 1_000_000_000.0,
+    )
+    client.log_metric(
+        mlflow_run_id,
+        "pipeline_peak_rss_bytes",
+        float(execution["process_lifetime_peak_rss_bytes_at_end"]),
+    )
+    acceptance_path = root / "acceptance" / "development-acceptance-v1.json"
+    if acceptance_path.is_file():
+        acceptance = _read_json_object(acceptance_path, "Acceptance report")
+        summary = acceptance["summary"]
+        client.log_metric(
+            mlflow_run_id, "development_accepted", float(bool(summary["accepted"]))
+        )
+        client.log_metric(
+            mlflow_run_id, "development_failed_checks", float(summary["fail"])
+        )
 
 
 def _build_symbol_bars(
@@ -546,6 +681,8 @@ def _run_development_pipeline(
         or tracking_status != "FINISHED"
     ):
         raise RuntimeError("Pipeline success and MLflow state differ")
+    compute_started = 0
+    executions: list[StageExecution] = []
     try:
         if tracking_status == "RUNNING":
             mlflow.log_param(mlflow_run_id, "code_reference", code_reference)
@@ -553,6 +690,7 @@ def _run_development_pipeline(
             mlflow.log_param(
                 mlflow_run_id, "dataset_version", dataset.dataset_version
             )
+        compute_started = time.perf_counter_ns()
 
         validation_output = root / "validation" / "manifest.json"
         _run_stage(
@@ -565,6 +703,8 @@ def _run_development_pipeline(
                 config.validation_config,
                 validation_output,
             ),
+            stage="validation",
+            executions=executions,
         )
 
         prediction_paths: list[Path] = []
@@ -589,6 +729,9 @@ def _run_development_pipeline(
                     bars,
                     symbol,
                 ),
+                stage="bars",
+                symbol=symbol,
+                executions=executions,
             )
             features = symbol_root / "features-full.parquet"
             _run_stage(
@@ -597,6 +740,9 @@ def _run_development_pipeline(
                 _stage_fingerprint(run_id, "features", symbol),
                 [features],
                 partial(build_features, bars, features, symbol),
+                stage="features",
+                symbol=symbol,
+                executions=executions,
             )
             labels = symbol_root / "labels-full.parquet"
             _run_stage(
@@ -608,6 +754,9 @@ def _run_development_pipeline(
                     build_labels,
                     bars, labels, DEFAULT_HORIZONS_MINUTES, 0.0
                 ),
+                stage="labels",
+                symbol=symbol,
+                executions=executions,
             )
             development = symbol_root / "development"
             development_features = development / "features.parquet"
@@ -621,6 +770,9 @@ def _run_development_pipeline(
                     isolate_development_rows,
                     features, labels, plan, development
                 ),
+                stage="development",
+                symbol=symbol,
+                executions=executions,
             )
             baseline = symbol_root / "baseline"
             predictions = baseline / "predictions.parquet"
@@ -637,6 +789,9 @@ def _run_development_pipeline(
                     config.model_config,
                     baseline,
                 ),
+                stage="baseline",
+                symbol=symbol,
+                executions=executions,
             )
             prediction_paths.append(predictions)
 
@@ -648,6 +803,7 @@ def _run_development_pipeline(
             [
                 portfolio / "ledger.parquet",
                 portfolio / "equity.parquet",
+                portfolio / "period-returns.parquet",
                 portfolio / "metrics.json",
             ],
             lambda: run_portfolio_evaluation(
@@ -656,6 +812,8 @@ def _run_development_pipeline(
                 config.validation_config,
                 portfolio,
             ),
+            stage="portfolio",
+            executions=executions,
         )
         run_record = {
             "format_version": 1,
@@ -664,10 +822,16 @@ def _run_development_pipeline(
             "code_reference": code_reference,
             "dataset_set": dataset.id,
             "dataset_version": dataset.dataset_version,
+            "dataset_file_count": len(dataset.files),
+            "dataset_rows": sum(entry.rows for entry in dataset.files),
             "symbols": list(config.symbols),
             "development_only": True,
             "locked_test_start": plan.locked_test_start.isoformat(),
         }
+        if config.acceptance_config is not None:
+            run_record["acceptance_set"] = load_acceptance_config(
+                config.acceptance_config
+            ).id
         run_record_path = root / "run.json"
         if run_record_path.exists():
             existing = json.loads(run_record_path.read_text(encoding="utf-8"))
@@ -675,6 +839,40 @@ def _run_development_pipeline(
                 raise RuntimeError("Pipeline run record differs")
         else:
             _write_json_no_replace(run_record_path, run_record)
+        execution_report_path = root / "execution-report.json"
+        if execution_report_path.exists():
+            execution_report = _read_json_object(
+                execution_report_path, "Execution report"
+            )
+            if execution_report.get("pipeline_run_id") != run_id:
+                raise RuntimeError("Execution report identity differs")
+        else:
+            attempt_mode = (
+                "verify_completed"
+                if success_record is not None
+                else "resumed_incomplete"
+                if any(execution.resumed for execution in executions)
+                else "fresh"
+            )
+            _write_json_no_replace(
+                execution_report_path,
+                {
+                    "format_version": 1,
+                    "pipeline_run_id": run_id,
+                    "status": "COMPUTE_SUCCEEDED",
+                    "report_scope": "computational_stages_through_portfolio",
+                    "attempt_mode": attempt_mode,
+                    "compute_elapsed_ns": time.perf_counter_ns() - compute_started,
+                    "process_lifetime_peak_rss_bytes_at_end": _peak_rss_bytes(),
+                    "stages": [asdict(execution) for execution in executions],
+                },
+            )
+        if config.acceptance_config is not None:
+            publish_acceptance_report(
+                root,
+                config.acceptance_config,
+                root / "acceptance" / "development-acceptance-v1.json",
+            )
         if tracking_status == "RUNNING":
             _log_metrics(mlflow, mlflow_run_id, root)
             _log_artifacts(mlflow, mlflow_run_id, root, config.symbols)

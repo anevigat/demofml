@@ -309,14 +309,15 @@ python scripts/run_portfolio_evaluation.py \
   --output artifacts/portfolio/normalized-sleeve-portfolio-v1
 ```
 
-The atomic output contains `ledger.parquet`, `equity.parquet`, and
-`metrics.json`, including attribution by symbol, horizon, and fold. P&L applies
+The atomic output contains `ledger.parquet`, `equity.parquet`,
+`period-returns.parquet`, and `metrics.json`, including attribution by symbol,
+horizon, and fold. P&L applies
 dimensionless executable returns to USD-normalized sleeve notional; it is not a
 broker-unit FX conversion ledger. Any locked-test prediction is rejected.
 
 ## Resumable Development Pipeline
 
-Pipeline set `development-pipeline-v1` executes the complete development DAG:
+Phase 11 pipeline set `development-pipeline-v1` executes the complete development DAG:
 validation manifest, then bars, features, executable labels, an aligned temporal
 slice and ridge baseline for each symbol, followed by the eight-symbol portfolio.
 Every stage has a run fingerprint, output hashes, and a pre-build intent record.
@@ -337,7 +338,7 @@ Run locally or inside the digest-pinned Kubernetes image:
 ```bash
 export DEMOFML_IMAGE_DIGEST="sha256:<runtime-image-digest>"
 demofml run-development \
-  --pipeline-config configs/experiments/development-pipeline-v1.toml \
+  --pipeline-config configs/experiments/development-pipeline-v2.toml \
   --workdir artifacts/runs
 ```
 
@@ -347,9 +348,40 @@ MLflow records provenance, portfolio metrics, per-symbol predictions and reports
 raw ticks, generated features, labels, and credentials are never logged. A local
 file lock prevents concurrent processes from sharing one run directory.
 
+## Development Acceptance And Profiling
+
+Phase 12 pipeline set `development-pipeline-v2` extends, rather than mutates, the
+published Phase 11 contract. Acceptance set `development-acceptance-v1` freezes
+its criteria before the full run is visible. It requires all eight symbols, 36
+monthly folds and three horizons; positive pooled executable returns at every
+horizon; at least 24 positive folds and six positive symbols per horizon; and at
+least 100 trades per symbol/horizon. Portfolio acceptance requires positive
+return, drawdown below 10%, realized volatility between 7.5% and 12.5%, leverage
+no greater than 2x, no drawdown halt, and attribution reconciliation within USD
+0.01.
+
+The gate recomputes signal metrics from predictions and replays portfolio
+accounting from those predictions. Stored ledger, equity, observed five-minute
+returns, risk metrics and attribution must match the replay; summary JSON alone
+is never sufficient evidence.
+
+These criteria apply only to development. A rejection is a valid research result:
+the pipeline and MLflow run still finish, but `development_accepted` is logged as
+zero and the locked test remains forbidden. Every run also writes an
+`execution-report.json` with stage action, elapsed nanoseconds, output bytes and
+rows, and process peak RSS. The report contains no raw object paths.
+
+Re-evaluate an existing run without rebuilding it:
+
+```bash
+demofml evaluate-development \
+  --run-root artifacts/runs/development-pipeline-v2/sha256-<run-id> \
+  --acceptance-config configs/experiments/development-acceptance-v1.toml
+```
+
 ## Status
 
-Phase 5 publication is in progress. Phases 6-11 contracts and pipelines are
+Phase 5 publication is in progress. Phases 6-12 contracts and pipelines are
 implemented; full-data execution starts only after the immutable source manifest
 appears at the end of the upload.
 

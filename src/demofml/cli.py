@@ -8,6 +8,11 @@ from demofml import __version__
 def main(argv: Sequence[str] | None = None) -> None:
     """Run the demofml command line interface."""
     values = list(argv) if argv is not None else sys.argv[1:]
+    if values and values[0] == "evaluate-development":
+        from demofml.reporting.acceptance import main as evaluate_development
+
+        evaluate_development(values[1:])
+        return
     if values and values[0] == "run-development":
         from demofml.orchestration.development import main as run_development
 
@@ -16,7 +21,9 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(prog="demofml")
     parser.add_argument(
-        "command", nargs="?", choices=["run-development", "smoke-infra"]
+        "command",
+        nargs="?",
+        choices=["evaluate-development", "run-development", "smoke-infra"],
     )
     arguments, remaining = parser.parse_known_args(values)
 

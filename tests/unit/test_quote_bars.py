@@ -6,7 +6,12 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import pytest
 
 from demofml.bars.build import build_quote_bars
-from demofml.bars.quotes import QuoteBarBuilder, aggregate_quote_bars
+from demofml.bars.quotes import (
+    QUOTE_BAR_SCHEMA,
+    QuoteBarBuilder,
+    aggregate_quote_bars,
+    validate_quote_bar_schema,
+)
 
 
 def _ticks(timestamps: list[datetime], bids: list[float]) -> pa.Table:
@@ -112,3 +117,48 @@ def test_parquet_bar_build_is_streaming_and_atomic(tmp_path: Path) -> None:
     assert bars.num_rows == 2
     assert pq.read_metadata(output).num_row_groups == 1
     assert not list(tmp_path.glob(".*.partial"))
+
+
+def test_quote_bar_contract_rejects_invalid_variants() -> None:
+    with pytest.raises(ValueError, match="columns"):
+        validate_quote_bar_schema(QUOTE_BAR_SCHEMA.remove(0))
+
+    wrong_type = QUOTE_BAR_SCHEMA.set(
+        5, pa.field("bid_open", pa.float32(), nullable=False)
+    )
+    with pytest.raises(ValueError, match="bid_open"):
+        validate_quote_bar_schema(wrong_type)
+
+    wrong_nullability = QUOTE_BAR_SCHEMA.set(
+        5, pa.field("bid_open", pa.float64(), nullable=True)
+    )
+    with pytest.raises(ValueError, match="bid_open"):
+        validate_quote_bar_schema(wrong_nullability)
+
+    with pytest.raises(ValueError, match="metadata"):
+        validate_quote_bar_schema(QUOTE_BAR_SCHEMA.remove_metadata())
+
+    wrong_metadata = QUOTE_BAR_SCHEMA.with_metadata(
+        {b"demofml.bar_set": b"quote-bars-v1", b"demofml.interval_minutes": b"10"}
+    )
+    with pytest.raises(ValueError, match="five-minute"):
+        validate_quote_bar_schema(wrong_metadata)
+
+
+def test_quote_bar_empty_and_invalid_builder_paths() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    ticks = _ticks([start], [1.0])
+    empty = ticks.slice(0, 0)
+
+    assert aggregate_quote_bars(empty, "EURUSD").num_rows == 0
+    with pytest.raises(ValueError, match="interval_minutes=5"):
+        aggregate_quote_bars(ticks, "EURUSD", interval_minutes=10)
+    with pytest.raises(ValueError, match="interval_minutes=5"):
+        QuoteBarBuilder("EURUSD", interval_minutes=10)
+
+    builder = QuoteBarBuilder("EURUSD")
+    assert builder.push(empty).num_rows == 0
+    assert builder.finish().num_rows == 0
+    builder.push(ticks)
+    with pytest.raises(ValueError, match="quality violations"):
+        builder.push(ticks)

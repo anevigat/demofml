@@ -42,7 +42,16 @@ jobs:
         run: mypy src tests
 
       - name: Test
-        run: pytest
+        run: |
+          coverage run -m pytest
+          coverage report
+          for module in \
+            src/demofml/data/ticks.py \
+            src/demofml/bars/quotes.py \
+            src/demofml/features/causal.py \
+            src/demofml/labels/executable.py; do
+            coverage report --include="$module" --fail-under=90
+          done
 
   container:
     name: Container smoke test

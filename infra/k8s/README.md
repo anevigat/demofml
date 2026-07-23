@@ -12,6 +12,7 @@ node selector and toleration.
 - A namespace-scoped ServiceAccount with API token mounting disabled.
 - A bootstrap Job that creates private buckets and a scoped application user.
 - A smoke Job that verifies S3 I/O and MLflow metric/artifact persistence.
+- A TLS Ingress exposing only the MinIO S3 API on the internal network.
 
 ## Deploy
 
@@ -29,6 +30,32 @@ Inspect resources:
 ```bash
 kubectl get pods,services,pvc,jobs -n demofml
 ```
+
+The private S3 Ingress is deliberately excluded from Kustomize so its hostname
+never appears in the public repository. Configure it locally:
+
+```bash
+export DEMOFML_INGRESS_HOST="<private-hostname>"
+./infra/k8s/deploy-ingress.sh
+unset DEMOFML_INGRESS_HOST
+```
+
+It routes the root path directly to `minio:9000`; no prefix middleware is used
+because modifying request paths would invalidate S3 signatures. The MinIO
+console, MLflow, and PostgreSQL remain unexposed.
+
+The Ingress uses a namespace-local self-signed certificate. Export its public
+certificate before configuring an S3 client:
+
+```bash
+kubectl get secret demofml-minio-tls -n demofml \
+  -o go-template='{{index .data "tls.crt" | base64decode}}' \
+  > ~/.config/demofml-minio-ca.crt
+```
+
+The certificate is public material; its private key remains only in the
+Kubernetes TLS Secret. S3 clients must use the exported certificate as their CA
+bundle rather than disabling certificate verification.
 
 Access internal UIs from this machine:
 

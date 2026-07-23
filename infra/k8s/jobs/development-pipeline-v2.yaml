@@ -1,0 +1,89 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: demofml-development-pipeline-v2
+  namespace: demofml
+  labels:
+    app.kubernetes.io/name: development-pipeline
+    app.kubernetes.io/part-of: demofml
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 604800
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: development-pipeline
+        app.kubernetes.io/part-of: demofml
+    spec:
+      restartPolicy: Never
+      serviceAccountName: demofml-workload
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        intechsol.com/workload: demofml
+      tolerations:
+        - key: intechsol.com/workload
+          operator: Equal
+          value: demofml
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: pipeline
+          image: anevigat/demofml@sha256:33be7ea833f9895f0bbe29b8b69eb88665883b18258232c2044a31691bbf4530
+          imagePullPolicy: IfNotPresent
+          args:
+            - run-development
+            - --pipeline-config
+            - /opt/demofml/configs/experiments/development-pipeline-v2.toml
+            - --workdir
+            - /work
+            - --code-reference
+            - sha256:33be7ea833f9895f0bbe29b8b69eb88665883b18258232c2044a31691bbf4530
+          envFrom:
+            - configMapRef:
+                name: demofml-runtime
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: demofml-services
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: demofml-services
+                  key: AWS_SECRET_ACCESS_KEY
+          resources:
+            requests:
+              cpu: "2"
+              memory: 8Gi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: "4"
+              memory: 24Gi
+              ephemeral-storage: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: work
+          persistentVolumeClaim:
+            claimName: demofml-development-work-v1
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi

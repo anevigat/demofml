@@ -42,16 +42,19 @@ uploaded all 23 objects and the immutable source `manifest.json`:
 kubectl apply -f infra/k8s/jobs/development-pipeline-pvc.yaml
 
 # Run only after publication reports 23/23 and a verified manifest location.
-kubectl apply -f infra/k8s/jobs/development-pipeline.yaml
+kubectl apply -f infra/k8s/jobs/development-pipeline-v2.yaml
 kubectl get job,pod,pvc -n demofml \
   -l app.kubernetes.io/name=development-pipeline
 ```
 
-The Job has no API token, uses only the `demofml` namespace, targets the dedicated
-worker, and pins both its image and experiment code identity to the same runtime
-digest. `backoffLimit: 0` prevents an automatic duplicate attempt. To resume after
-a failure, delete only the Job and apply it again; verified checkpoints remain on
-`demofml-development-work-v1`. Never delete that PVC during a retry.
+The v2 Job runs the Phase 12 acceptance and profiling contract. The v1 manifest is
+retained as the immutable Phase 11 workload and must not be launched alongside
+v2. The Job has no API token, uses only the `demofml` namespace, targets the
+dedicated worker, and pins both its image and experiment code identity to the same
+runtime digest. `backoffLimit: 0` prevents an automatic duplicate attempt. To
+resume after a failure, delete only the v2 Job and apply it again; verified
+checkpoints remain on `demofml-development-work-v1`. Never delete that PVC during
+a retry.
 
 The private S3 Ingress is deliberately excluded from Kustomize so its hostname
 never appears in the public repository. Configure it locally:

@@ -253,9 +253,37 @@ non-UTC timestamps, and feature/label schemas whose version or information
 window differs from the validation plan. The locked test must not be inspected
 for model or feature selection.
 
+## Development Ridge Baseline
+
+Model set `baseline-ridge-v1` trains one deterministic ridge model per symbol,
+fold, and horizon. Each model predicts long and short executable returns from
+`causal-v1`; it selects the larger positive prediction or abstains to `flat`.
+Missing features use medians fitted only on the fold's training rows, followed
+by training-only standardization. Rows with unresolved executable targets are
+excluded for that horizon.
+
+The runner rejects key misalignment, contract-version differences, insufficient
+training rows, and every timestamp in the locked period. It writes predictions
+and cost-aware development metrics atomically below one ignored directory:
+
+```bash
+python scripts/run_baseline_experiment.py \
+  --features artifacts/features/EURUSD/causal-v1.parquet \
+  --labels artifacts/labels/EURUSD/executable-v1.parquet \
+  --validation-config configs/experiments/purged-walk-forward-v1.toml \
+  --model-config configs/experiments/baseline-ridge-v1.toml \
+  --output artifacts/experiments/EURUSD/baseline-ridge-v1
+```
+
+Metrics include trade rate, mean executable return, dispersion, and hit rate by
+fold and horizon, plus aggregate results and an always-flat comparator. They do
+not claim portfolio performance because overlapping-position accounting,
+position sizing, volatility targeting, and drawdown controls remain separate.
+The locked test remains forbidden until one development configuration is frozen.
+
 ## Status
 
-Phase 5 publication is in progress. Phases 6-8 contracts and pipelines are
+Phase 5 publication is in progress. Phases 6-9 contracts and pipelines are
 implemented; full-data execution follows completion of the immutable upload.
 
 ## License

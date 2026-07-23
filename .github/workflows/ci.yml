@@ -50,7 +50,9 @@ jobs:
             src/demofml/bars/quotes.py \
             src/demofml/features/causal.py \
             src/demofml/labels/executable.py \
-            src/demofml/validation/splits.py; do
+            src/demofml/validation/splits.py \
+            src/demofml/models/baseline.py \
+            src/demofml/evaluation/signals.py; do
             coverage report --include="$module" --fail-under=90
           done
 

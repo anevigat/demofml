@@ -8,6 +8,7 @@ from demofml.labels.executable import (
     LABEL_SET_ID,
     MAX_QUOTE_LATENCY_MINUTES,
 )
+from demofml.models.baseline import FEATURE_COLUMNS, MODEL_SET_ID, load_baseline_config
 from demofml.validation.splits import (
     INTERVAL_SEMANTICS,
     VALIDATION_SET_ID,
@@ -53,3 +54,14 @@ def test_validation_config_matches_implementation() -> None:
     assert plan.purge_minutes == (
         max(DEFAULT_HORIZONS_MINUTES) + MAX_QUOTE_LATENCY_MINUTES
     )
+
+
+def test_baseline_config_matches_implementation() -> None:
+    path = PROJECT_ROOT / "configs/experiments/baseline-ridge-v1.toml"
+    config = load_baseline_config(path)
+
+    assert config.id == MODEL_SET_ID
+    assert config.features == FEATURE_COLUMNS
+    assert config.horizons_minutes == DEFAULT_HORIZONS_MINUTES
+    assert config.action_threshold_bps == 0.0
+    assert config.locked_test_policy == "forbidden"

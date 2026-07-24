@@ -198,13 +198,8 @@ class _CausalVolatility:
 
     def advance(self, boundary: datetime) -> None:
         boundary_bucket = self._bucket(boundary)
-        periods = {
-            bucket for bucket in self._pending if bucket < boundary_bucket
-        }
-        if (
-            self._last_observed is not None
-            and self._last_observed < boundary_bucket
-        ):
+        periods = {bucket for bucket in self._pending if bucket < boundary_bucket}
+        if self._last_observed is not None and self._last_observed < boundary_bucket:
             periods.add(self._last_observed)
         for period in sorted(periods.difference(self._finalized)):
             pending = self._pending.pop(period, None)
@@ -287,20 +282,29 @@ def load_portfolio_config(path: Path) -> PortfolioConfig:
         raise ValueError(f"invalid portfolio config field: {error}") from error
 
 
-def _schema(config: PortfolioConfig, fields: list[pa.Field]) -> pa.Schema:
-    return pa.schema(
-        fields,
-        metadata={
-            b"demofml.portfolio_set": config.id.encode(),
-            b"demofml.prediction_set": config.prediction_set.encode(),
-            b"demofml.model_set": config.model_set.encode(),
-            b"demofml.validation_set": config.validation_set.encode(),
-            b"demofml.return_accounting": config.return_accounting.encode(),
-        },
-    )
+def _schema(
+    config: PortfolioConfig,
+    fields: list[pa.Field],
+    prediction_set: str | None = None,
+    candidate_id: str | None = None,
+) -> pa.Schema:
+    metadata = {
+        b"demofml.portfolio_set": config.id.encode(),
+        b"demofml.prediction_set": (prediction_set or config.prediction_set).encode(),
+        b"demofml.model_set": config.model_set.encode(),
+        b"demofml.validation_set": config.validation_set.encode(),
+        b"demofml.return_accounting": config.return_accounting.encode(),
+    }
+    if candidate_id is not None:
+        metadata[b"demofml.candidate_id"] = candidate_id.encode()
+    return pa.schema(fields, metadata=metadata)
 
 
-def ledger_schema(config: PortfolioConfig) -> pa.Schema:
+def ledger_schema(
+    config: PortfolioConfig,
+    prediction_set: str | None = None,
+    candidate_id: str | None = None,
+) -> pa.Schema:
     """Build the immutable settled-lot schema."""
     return _schema(
         config,
@@ -320,10 +324,16 @@ def ledger_schema(config: PortfolioConfig) -> pa.Schema:
             pa.field("equity_after_exit", pa.float64(), nullable=False),
             pa.field("drawdown_after_exit", pa.float64(), nullable=False),
         ],
+        prediction_set,
+        candidate_id,
     )
 
 
-def equity_schema(config: PortfolioConfig) -> pa.Schema:
+def equity_schema(
+    config: PortfolioConfig,
+    prediction_set: str | None = None,
+    candidate_id: str | None = None,
+) -> pa.Schema:
     """Build the immutable event-time equity schema."""
     return _schema(
         config,
@@ -337,18 +347,29 @@ def equity_schema(config: PortfolioConfig) -> pa.Schema:
             pa.field("gross_notional_usd", pa.float64(), nullable=False),
             pa.field("halted", pa.bool_(), nullable=False),
         ],
+        prediction_set,
+        candidate_id,
     )
 
 
-def _validate_prediction_schema(table: pa.Table, config: PortfolioConfig) -> None:
+def _validate_prediction_schema(
+    table: pa.Table,
+    config: PortfolioConfig,
+    prediction_set: str,
+    candidate_id: str | None,
+) -> None:
     metadata = table.schema.metadata or {}
     for key, expected in (
-        (b"demofml.prediction_set", config.prediction_set),
+        (b"demofml.prediction_set", prediction_set),
         (b"demofml.model_set", config.model_set),
         (b"demofml.validation_set", config.validation_set),
     ):
         if metadata.get(key) != expected.encode():
             raise ValueError(f"prediction metadata mismatch for {key.decode()}")
+    if candidate_id is not None and metadata.get(b"demofml.candidate_id") != (
+        candidate_id.encode()
+    ):
+        raise ValueError("prediction metadata mismatch for demofml.candidate_id")
     for name, expected_type in _PREDICTION_FIELDS.items():
         if name not in table.column_names:
             raise ValueError(f"prediction schema is missing {name}")
@@ -366,7 +387,12 @@ def _integer(value: object, name: str) -> int:
 def _prediction_rows(
     tables: Iterable[pa.Table],
     config: PortfolioConfig,
-    locked_test_start: datetime,
+    *,
+    prediction_set: str,
+    decision_start: datetime | None,
+    decision_end_exclusive: datetime,
+    exit_end_exclusive: datetime,
+    candidate_id: str | None,
 ) -> list[_Prediction]:
     rows: list[_Prediction] = []
     symbols: set[str] = set()
@@ -374,7 +400,7 @@ def _prediction_rows(
     table_count = 0
     for table in tables:
         table_count += 1
-        _validate_prediction_schema(table, config)
+        _validate_prediction_schema(table, config, prediction_set, candidate_id)
         for row in table.select(list(_PREDICTION_FIELDS)).to_pylist():
             symbol = str(row["symbol"])
             model_set = str(row["model_set"])
@@ -402,15 +428,21 @@ def _prediction_rows(
                 exit_time, datetime
             ):
                 raise ValueError("execution times cannot be null")
-            if decision_time >= locked_test_start or exit_time >= locked_test_start:
-                raise ValueError("locked-test predictions are forbidden")
+            if decision_start is not None and decision_time < decision_start:
+                raise ValueError("prediction decision precedes the permitted interval")
+            if decision_time >= decision_end_exclusive:
+                if decision_start is None:
+                    raise ValueError("locked-test predictions are forbidden")
+                raise ValueError("prediction decision exceeds the permitted interval")
+            if exit_time >= exit_end_exclusive:
+                if decision_start is None:
+                    raise ValueError("locked-test predictions are forbidden")
+                raise ValueError("prediction exit exceeds the permitted interval")
             entry_deadline = decision_time + timedelta(
                 minutes=MAX_QUOTE_LATENCY_MINUTES
             )
             exit_target = decision_time + timedelta(minutes=horizon)
-            exit_deadline = exit_target + timedelta(
-                minutes=MAX_QUOTE_LATENCY_MINUTES
-            )
+            exit_deadline = exit_target + timedelta(minutes=MAX_QUOTE_LATENCY_MINUTES)
             if not decision_time <= entry_time <= entry_deadline:
                 raise ValueError("prediction entry_time violates executable latency")
             if not exit_target <= exit_time <= exit_deadline:
@@ -466,13 +498,27 @@ def _prediction_rows(
     return rows
 
 
-def simulate_portfolio(
+def _simulate_portfolio(
     prediction_tables: Iterable[pa.Table],
     config: PortfolioConfig,
-    locked_test_start: datetime,
+    *,
+    prediction_set: str,
+    decision_start: datetime | None,
+    decision_end_exclusive: datetime,
+    exit_end_exclusive: datetime,
+    candidate_id: str | None,
 ) -> PortfolioSimulation:
-    """Settle independent lots with causal sizing and permanent drawdown halt."""
-    rows = deque(_prediction_rows(prediction_tables, config, locked_test_start))
+    rows = deque(
+        _prediction_rows(
+            prediction_tables,
+            config,
+            prediction_set=prediction_set,
+            decision_start=decision_start,
+            decision_end_exclusive=decision_end_exclusive,
+            exit_end_exclusive=exit_end_exclusive,
+            candidate_id=candidate_id,
+        )
+    )
     first_time = rows[0].decision_time
 
     equity = config.initial_capital_usd
@@ -595,9 +641,7 @@ def simulate_portfolio(
         while rows and rows[0].decision_time == decision_time:
             decision_rows.append(rows.popleft())
         if halted:
-            suppressed_signals += sum(
-                row.action != "flat" for row in decision_rows
-            )
+            suppressed_signals += sum(row.action != "flat" for row in decision_rows)
             continue
         risk_leverage = volatility.leverage
         for row in decision_rows:
@@ -630,10 +674,52 @@ def simulate_portfolio(
     process_until(None)
     volatility.finish()
     return PortfolioSimulation(
-        ledger=pa.Table.from_pylist(ledger_rows, schema=ledger_schema(config)),
-        equity=pa.Table.from_pylist(equity_rows, schema=equity_schema(config)),
+        ledger=pa.Table.from_pylist(
+            ledger_rows, schema=ledger_schema(config, prediction_set, candidate_id)
+        ),
+        equity=pa.Table.from_pylist(
+            equity_rows, schema=equity_schema(config, prediction_set, candidate_id)
+        ),
         period_returns=volatility.all_returns,
         suppressed_signals=suppressed_signals,
         maximum_active_positions=maximum_active,
         maximum_gross_leverage=maximum_gross_leverage,
+    )
+
+
+def simulate_portfolio(
+    prediction_tables: Iterable[pa.Table],
+    config: PortfolioConfig,
+    locked_test_start: datetime,
+) -> PortfolioSimulation:
+    """Settle development lots while forbidding every locked-test timestamp."""
+    return _simulate_portfolio(
+        prediction_tables,
+        config,
+        prediction_set=config.prediction_set,
+        decision_start=None,
+        decision_end_exclusive=locked_test_start,
+        exit_end_exclusive=locked_test_start,
+        candidate_id=None,
+    )
+
+
+def simulate_locked_portfolio(
+    prediction_tables: Iterable[pa.Table],
+    config: PortfolioConfig,
+    locked_test_start: datetime,
+    locked_test_decision_end: datetime,
+    locked_test_end_exclusive: datetime,
+    prediction_set: str,
+    candidate_id: str,
+) -> PortfolioSimulation:
+    """Settle one candidate strictly inside the authorized locked interval."""
+    return _simulate_portfolio(
+        prediction_tables,
+        config,
+        prediction_set=prediction_set,
+        decision_start=locked_test_start,
+        decision_end_exclusive=locked_test_decision_end,
+        exit_end_exclusive=locked_test_end_exclusive,
+        candidate_id=candidate_id,
     )

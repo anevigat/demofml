@@ -379,11 +379,65 @@ demofml evaluate-development \
   --acceptance-config configs/experiments/development-acceptance-v1.toml
 ```
 
+## Frozen Candidate And One-Shot Locked Test
+
+Phase 13 protocol `locked-test-evaluation-v1` is fixed before development
+results are available. It does not relax any Phase 11 or Phase 12
+`locked_test_policy = "forbidden"` contract. After, and only after, one Phase 12
+run is accepted, freeze its final candidate without S3 credentials:
+
+```bash
+demofml freeze-candidate \
+  --run-root artifacts/runs/development-pipeline-v2/sha256-<run-id> \
+  --protocol-config configs/experiments/locked-test-evaluation-v1.toml \
+  --output artifacts/locked-test/candidate-v1 \
+  --code-reference sha256:<phase-13-image-digest>
+```
+
+The command recomputes development acceptance, requires the recorded report to
+match, fits one final ridge model per symbol/horizon using only fully resolved
+development rows, and stores portable numeric JSON rather than Python pickles.
+The package contains 24 models, 73 pre-lock context bars per symbol, contract
+copies, accepted stage markers and hashes for every artifact. Training reads
+only temporary source snapshots whose hashes match those captured markers. The
+package refuses replacement and records explicitly that no locked data was
+accessed.
+
+The locked evaluator scores every eligible decision before consulting outcome
+availability. Hidden executable labels are joined only afterward; unresolved
+executions remain in the evaluation as explicit flat, zero-return rows and fail
+the frozen completeness gate above 5%, so they cannot selectively remove a
+model score. A custodian-supplied grant
+binds the candidate manifest, its complete contract bundle, the locked dataset
+allowlist and runtime image by SHA-256. A local durable
+`_LOCKED_TEST_STARTED.json` marker is created before the S3 client is
+constructed, and the same claim root cannot retry after a failure:
+
+```bash
+demofml evaluate-locked-test \
+  --candidate-root artifacts/locked-test/candidate-v1 \
+  --protocol-config configs/experiments/locked-test-evaluation-v1.toml \
+  --dataset-config /protected/cleaned-ticks-locked-test-v1.toml \
+  --grant /protected/locked-test-grant-v1.json \
+  --workdir /protected/locked-test-work \
+  --code-reference sha256:<same-phase-13-image-digest>
+```
+
+Do not run either command merely because the code exists. Candidate freeze
+requires a completed and accepted full development run. Locked evaluation also
+requires a separately protected, read-only data principal, an externally issued
+grant and storage where researchers cannot delete the consumed marker. A PVC
+file alone cannot enforce one-shot behavior against a namespace administrator,
+nor prevent the same grant being used with another path, so the external claim
+authority must atomically consume the grant ID first. No deployable locked-test
+Job is included yet.
+
 ## Status
 
-Phase 5 publication is in progress. Phases 6-12 contracts and pipelines are
-implemented; full-data execution starts only after the immutable source manifest
-appears at the end of the upload.
+Phase 5 publication is in progress. Phases 6-13 contracts and pipelines are
+implemented. Phase 13 remains inactive: full development starts only after the
+immutable source manifest appears, and the locked test remains forbidden until
+development acceptance, candidate freeze and external authorization all finish.
 
 ## License
 

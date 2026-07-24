@@ -98,6 +98,24 @@ API server cannot validate or establish its streaming connection to the
 kubelet. Namespace workloads continue running, but a cluster administrator
 must repair the node serving certificate before those commands are available.
 
+## Locked Test Isolation
+
+The repository intentionally does not contain a deployable locked-test Job.
+Application checks consume a global marker before remote access, but Kubernetes
+and a mutable PVC cannot stop an administrator from deleting that marker or
+recreating a Job under another name. Before Phase 13 can be deployed, provision:
+
+- A locked-data bucket or prefix unreachable by `demofml-services`.
+- A short-lived GET-only identity restricted to the exact allowlisted objects.
+- A protected grant issued after one accepted candidate is frozen.
+- Append-only storage for the grant claim, terminal marker and final artifacts.
+- Admission controls pinning the candidate/runtime digest and forbidding retries.
+- `parallelism: 1`, `completions: 1`, `backoffLimit: 0` and `restartPolicy: Never`.
+
+The freeze workload must receive no AWS credentials. The eventual locked
+workload must not mount `demofml-development-work-v1` or reuse the broad
+development secret. These are deployment blockers, not optional hardening.
+
 ## Data Safety
 
 The `local-path` StorageClass has a `Delete` reclaim policy. StatefulSets retain

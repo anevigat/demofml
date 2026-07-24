@@ -33,6 +33,7 @@ from demofml.data.remote import (
     load_published_manifest,
     materialize_development_file,
     s3_client,
+    verify_materialized_inventory,
 )
 from demofml.evaluation.portfolio import load_portfolio_config
 from demofml.features.build import build_features
@@ -631,9 +632,9 @@ def _build_symbol_bars(
 ) -> object:
     for entry in entries:
         materialize_development_file(client, bucket, dataset, entry, inputs)
-    return build_quote_bars(
-        inputs / symbol, output, symbol, BAR_INTERVAL_MINUTES
-    )
+    source = inputs / symbol
+    verify_materialized_inventory(source, entries, path_prefix=symbol)
+    return build_quote_bars(source, output, symbol, BAR_INTERVAL_MINUTES)
 
 
 def _run_development_pipeline(

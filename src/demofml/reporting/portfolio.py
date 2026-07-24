@@ -62,6 +62,10 @@ def _attribution(ledger: pa.Table, field: str) -> list[dict[str, Any]]:
 def portfolio_report(
     simulation: PortfolioSimulation,
     config: PortfolioConfig,
+    *,
+    development_only: bool = True,
+    prediction_set: str | None = None,
+    candidate_id: str | None = None,
 ) -> dict[str, Any]:
     """Build deterministic portfolio metrics without claiming locked performance."""
     equity_rows = simulation.equity.to_pylist()
@@ -76,13 +80,13 @@ def portfolio_report(
         if period_returns.size >= 2
         else 0.0
     )
-    return {
+    report: dict[str, Any] = {
         "format_version": 1,
         "portfolio_set": config.id,
-        "prediction_set": config.prediction_set,
+        "prediction_set": prediction_set or config.prediction_set,
         "model_set": config.model_set,
         "validation_set": config.validation_set,
-        "development_only": True,
+        "development_only": development_only,
         "initial_capital_usd": config.initial_capital_usd,
         "final_equity_usd": final_equity,
         "total_return": final_equity / config.initial_capital_usd - 1.0,
@@ -109,8 +113,13 @@ def portfolio_report(
         "pnl_recognition": config.pnl_recognition,
         "interpretation": (
             "normalized_return_sleeves_with_exit_time_pnl_no_intratrade_mark_to_market"
+            if development_only
+            else "one_shot_locked_test_normalized_return_sleeves"
         ),
     }
+    if candidate_id is not None:
+        report["candidate_id"] = candidate_id
+    return report
 
 
 def run_portfolio_evaluation(

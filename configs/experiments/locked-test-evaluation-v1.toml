@@ -1,0 +1,40 @@
+format_version = 1
+id = "locked-test-evaluation-v1"
+source_pipeline_set = "development-pipeline-v2"
+source_acceptance_set = "development-acceptance-v1"
+locked_dataset_set = "cleaned-ticks-locked-test-v1"
+model_artifact_set = "frozen-ridge-model-v1"
+prediction_set = "locked-test-predictions-v1"
+evaluation_set = "locked-test-signal-metrics-v1"
+final_fit_policy = "all_resolved_development_rows_before_decision_end"
+unresolved_execution_policy = "flat_zero_return_after_blind_scoring"
+one_shot_policy = "consume_before_remote_access_no_retry"
+feature_context_bars = 73
+locked_test_start = "2025-01-01T00:00:00Z"
+locked_test_end_exclusive = "2026-03-11T00:00:00Z"
+decision_interval_minutes = 5
+symbols = ["AUDUSD", "EURCHF", "EURJPY", "EURUSD", "GBPJPY", "GBPUSD", "USDCAD", "USDJPY"]
+horizons_minutes = [15, 30, 60]
+
+acceptance_config = "development-acceptance-v1.toml"
+source_pipeline_config = "development-pipeline-v2.toml"
+feature_config = "../features/causal-v1.toml"
+label_config = "executable-labels-v1.toml"
+validation_config = "purged-walk-forward-v1.toml"
+model_config = "baseline-ridge-v1.toml"
+portfolio_config = "portfolio-v1.toml"
+
+[model]
+minimum_positive_symbols_per_horizon = 6
+minimum_trades_per_symbol_horizon = 100
+minimum_mean_executable_return_bps_exclusive = 0.0
+maximum_unresolved_execution_fraction = 0.05
+
+[portfolio]
+minimum_total_return_exclusive = 0.0
+maximum_drawdown_exclusive = 0.10
+minimum_realized_annual_volatility = 0.075
+maximum_realized_annual_volatility = 0.125
+maximum_gross_leverage = 2.0
+require_no_drawdown_halt = true
+reconciliation_tolerance_usd = 0.01

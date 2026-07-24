@@ -27,8 +27,10 @@ for module in \
   src/demofml/features/causal.py \
   src/demofml/labels/executable.py \
   src/demofml/validation/splits.py \
-  src/demofml/models/baseline.py \
-  src/demofml/evaluation/signals.py \
+    src/demofml/models/baseline.py \
+    src/demofml/models/frozen.py \
+    src/demofml/models/locked.py \
+    src/demofml/evaluation/signals.py \
   src/demofml/evaluation/portfolio.py; do
   coverage report --include="$module" --fail-under=90
 done

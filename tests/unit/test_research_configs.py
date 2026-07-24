@@ -15,6 +15,11 @@ from demofml.labels.executable import (
     MAX_QUOTE_LATENCY_MINUTES,
 )
 from demofml.models.baseline import FEATURE_COLUMNS, MODEL_SET_ID, load_baseline_config
+from demofml.orchestration.locked import (
+    LOCKED_TEST_SET_ID,
+    ONE_SHOT_POLICY,
+    load_locked_test_config,
+)
 from demofml.reporting.acceptance import ACCEPTANCE_SET_ID, load_acceptance_config
 from demofml.validation.splits import (
     INTERVAL_SEMANTICS,
@@ -98,3 +103,14 @@ def test_development_acceptance_is_frozen_before_execution() -> None:
     assert config.expected_authorized_files == 14
     assert config.expected_source_rows == 1_624_981_795
     assert config.locked_test_policy == "forbidden"
+
+
+def test_locked_test_protocol_is_frozen_before_candidate_selection() -> None:
+    path = PROJECT_ROOT / "configs/experiments/locked-test-evaluation-v1.toml"
+    config = load_locked_test_config(path)
+
+    assert config.id == LOCKED_TEST_SET_ID
+    assert config.one_shot_policy == ONE_SHOT_POLICY
+    assert config.symbols == PORTFOLIO_SYMBOLS
+    assert config.horizons_minutes == PORTFOLIO_HORIZONS
+    assert config.feature_context_bars == 73

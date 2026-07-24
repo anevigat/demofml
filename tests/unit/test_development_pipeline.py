@@ -343,6 +343,9 @@ def test_pipeline_runs_all_stages_once_and_then_is_idempotent(
     monkeypatch.setattr(
         development_module, "materialize_development_file", lambda *a: tmp_path
     )
+    monkeypatch.setattr(
+        development_module, "verify_materialized_inventory", lambda *a, **k: ()
+    )
     monkeypatch.setattr(development_module, "build_validation_manifest", validation)
     monkeypatch.setattr(development_module, "build_quote_bars", file_builder("bars"))
     monkeypatch.setattr(development_module, "build_features", file_builder("features"))

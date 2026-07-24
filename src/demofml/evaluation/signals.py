@@ -11,6 +11,7 @@ from typing import Any
 import pyarrow as pa  # type: ignore[import-untyped]
 
 from demofml.models.baseline import PREDICTION_SET_ID
+from demofml.models.locked import LOCKED_PREDICTION_SET_ID
 
 EVALUATION_SET_ID = "executable-signal-metrics-v1"
 _REQUIRED_COLUMNS = (
@@ -105,4 +106,55 @@ def evaluate_predictions(predictions: pa.Table) -> dict[str, Any]:
             "trade_rate": 0.0,
         },
         "interpretation": "development_only_no_overlapping_position_accounting",
+    }
+
+
+def evaluate_locked_predictions(
+    predictions: pa.Table, candidate_id: str
+) -> dict[str, Any]:
+    """Evaluate trusted locked outcomes without accepting caller-supplied provenance."""
+    missing = set(_REQUIRED_COLUMNS).difference(predictions.column_names)
+    if missing:
+        raise ValueError(f"prediction schema is missing {sorted(missing)}")
+    metadata = predictions.schema.metadata or {}
+    if metadata.get(b"demofml.prediction_set") != LOCKED_PREDICTION_SET_ID.encode():
+        raise ValueError("prediction metadata is not the locked prediction set")
+    if metadata.get(b"demofml.candidate_id") != candidate_id.encode():
+        raise ValueError("prediction candidate identity differs")
+    if predictions.num_rows == 0:
+        raise ValueError("cannot evaluate empty locked predictions")
+    rows = predictions.select(list(_REQUIRED_COLUMNS)).to_pylist()
+    aggregate: dict[int, list[dict[str, object]]] = defaultdict(list)
+    by_symbol: dict[tuple[str, int], list[dict[str, object]]] = defaultdict(list)
+    for row in rows:
+        horizon = int(_number(row["horizon_minutes"], "horizon_minutes"))
+        symbol = str(row["symbol"])
+        aggregate[horizon].append(row)
+        by_symbol[(symbol, horizon)].append(row)
+    return {
+        "format_version": 1,
+        "evaluation_set": "locked-test-signal-metrics-v1",
+        "prediction_set": LOCKED_PREDICTION_SET_ID,
+        "candidate_id": candidate_id,
+        "model_set": metadata.get(b"demofml.model_set", b"").decode(),
+        "validation_set": metadata.get(b"demofml.validation_set", b"").decode(),
+        "development_only": False,
+        "locked_test": True,
+        "aggregate": [
+            {"horizon_minutes": horizon, **_metrics(aggregate[horizon])}
+            for horizon in sorted(aggregate)
+        ],
+        "symbols": [
+            {
+                "symbol": symbol,
+                "horizon_minutes": horizon,
+                **_metrics(by_symbol[(symbol, horizon)]),
+            }
+            for symbol, horizon in sorted(by_symbol)
+        ],
+        "always_flat_comparator": {
+            "mean_executable_return_bps": 0.0,
+            "trade_rate": 0.0,
+        },
+        "interpretation": "one_shot_locked_test_executable_outcomes",
     }

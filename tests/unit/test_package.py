@@ -33,3 +33,21 @@ def test_cli_delegates_acceptance_arguments(monkeypatch: pytest.MonkeyPatch) -> 
     main(["evaluate-development", "--run-root", "/work/run"])
 
     assert received == [["--run-root", "/work/run"]]
+
+
+@pytest.mark.parametrize(
+    ("command", "target"),
+    [
+        ("freeze-candidate", "demofml.orchestration.locked.freeze_main"),
+        ("evaluate-locked-test", "demofml.orchestration.locked.evaluate_main"),
+    ],
+)
+def test_cli_delegates_phase_13_arguments(
+    monkeypatch: pytest.MonkeyPatch, command: str, target: str
+) -> None:
+    received: list[list[str] | None] = []
+    monkeypatch.setattr(target, lambda argv: received.append(argv))
+
+    main([command, "--workdir", "/work"])
+
+    assert received == [["--workdir", "/work"]]

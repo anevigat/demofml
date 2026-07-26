@@ -51,6 +51,8 @@ spec:
             - configMapRef:
                 name: demofml-runtime
           env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:

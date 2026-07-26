@@ -202,7 +202,9 @@ def test_stage_recovers_output_published_before_checkpoint(tmp_path: Path) -> No
     assert executions[0].resumed is True
 
 
-def test_stage_profiles_fresh_and_verified_actions(tmp_path: Path) -> None:
+def test_stage_profiles_fresh_and_verified_actions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     output = tmp_path / "output.json"
     marker = tmp_path / "stage.json"
     fresh: list[development_module.StageExecution] = []
@@ -232,6 +234,10 @@ def test_stage_profiles_fresh_and_verified_actions(tmp_path: Path) -> None:
     assert fresh[0].build_elapsed_ns is not None
     assert verified[0].action == "verified_skipped"
     assert verified[0].build_elapsed_ns is None
+    captured = capsys.readouterr().out
+    assert "stage started: validation\n" in captured
+    assert "stage completed: validation elapsed_seconds=" in captured
+    assert "stage verified: validation\n" in captured
 
 
 def test_pipeline_lock_rejects_concurrent_attempt(tmp_path: Path) -> None:

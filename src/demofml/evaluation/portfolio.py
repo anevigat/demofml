@@ -15,10 +15,20 @@ import numpy as np
 import pyarrow as pa  # type: ignore[import-untyped]
 
 from demofml.labels.executable import MAX_QUOTE_LATENCY_MINUTES
-from demofml.models.baseline import MODEL_SET_ID, PREDICTION_SET_ID
+from demofml.models.baseline import (
+    MODEL_SET_ID,
+    MODEL_SET_V2_ID,
+    PREDICTION_SET_ID,
+    PREDICTION_SET_V3_ID,
+)
 from demofml.validation.splits import VALIDATION_SET_ID
 
 PORTFOLIO_SET_ID = "normalized-sleeve-portfolio-v1"
+PORTFOLIO_SET_V2_ID = "normalized-sleeve-portfolio-v2"
+_PORTFOLIO_PROVENANCE = {
+    PORTFOLIO_SET_ID: (PREDICTION_SET_ID, MODEL_SET_ID),
+    PORTFOLIO_SET_V2_ID: (PREDICTION_SET_V3_ID, MODEL_SET_V2_ID),
+}
 PORTFOLIO_SYMBOLS = (
     "AUDUSD",
     "EURCHF",
@@ -77,11 +87,12 @@ class PortfolioConfig:
     locked_test_policy: str
 
     def __post_init__(self) -> None:
-        if self.id != PORTFOLIO_SET_ID:
-            raise ValueError(f"portfolio id must be {PORTFOLIO_SET_ID}")
+        if self.id not in _PORTFOLIO_PROVENANCE:
+            raise ValueError("portfolio id is not supported")
+        expected_prediction_set, expected_model_set = _PORTFOLIO_PROVENANCE[self.id]
         if (
-            self.prediction_set != PREDICTION_SET_ID
-            or self.model_set != MODEL_SET_ID
+            self.prediction_set != expected_prediction_set
+            or self.model_set != expected_model_set
             or self.validation_set != VALIDATION_SET_ID
         ):
             raise ValueError("portfolio prediction provenance is incompatible")

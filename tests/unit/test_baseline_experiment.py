@@ -18,7 +18,9 @@ from demofml.labels.executable import label_schema
 from demofml.models.baseline import (
     FEATURE_COLUMNS,
     MODEL_SET_ID,
+    MODEL_SET_V2_ID,
     PREDICTION_SET_ID,
+    PREDICTION_SET_V3_ID,
     BaselineConfig,
     align_research_tables,
     load_baseline_config,
@@ -29,6 +31,7 @@ from demofml.validation.splits import ValidationPlan, load_validation_plan
 
 PROJECT_ROOT = Path(__file__).parents[2]
 MODEL_CONFIG = PROJECT_ROOT / "configs/experiments/baseline-ridge-v1.toml"
+MODEL_V2_CONFIG = PROJECT_ROOT / "configs/experiments/baseline-ridge-v2.toml"
 VALIDATION_CONFIG = PROJECT_ROOT / "configs/experiments/purged-walk-forward-v1.toml"
 
 
@@ -92,6 +95,72 @@ def _tables() -> tuple[pa.Table, pa.Table]:
     )
 
 
+def _v2_plan() -> ValidationPlan:
+    return replace(
+        _plan(),
+        train_start=datetime(2021, 11, 1, tzinfo=UTC),
+    )
+
+
+def _v2_config() -> BaselineConfig:
+    return replace(
+        load_baseline_config(MODEL_V2_CONFIG),
+        minimum_training_rows=10,
+        minimum_calibration_rows=10,
+    )
+
+
+def _v2_tables() -> tuple[pa.Table, pa.Table]:
+    times = [
+        datetime(2021, 11, 30, 20, 0, tzinfo=UTC)
+        + timedelta(minutes=5 * index)
+        for index in range(24)
+    ]
+    times.extend(
+        datetime(2021, 12, 31, 20, 0, tzinfo=UTC)
+        + timedelta(minutes=5 * index)
+        for index in range(24)
+    )
+    times.extend(
+        datetime(2022, 1, 1, tzinfo=UTC) + timedelta(minutes=5 * index)
+        for index in range(6)
+    )
+    feature_rows: list[dict[str, object]] = []
+    label_rows: list[dict[str, object]] = []
+    for index, decision_time in enumerate(times):
+        signal = float(index - 20)
+        feature_row: dict[str, object] = {
+            "symbol": "EURUSD",
+            "bar_end": decision_time,
+        }
+        feature_row.update(
+            {
+                name: signal + feature_index / 100.0
+                for feature_index, name in enumerate(FEATURE_COLUMNS)
+            }
+        )
+        feature_rows.append(feature_row)
+        label_row: dict[str, object] = {
+            "symbol": "EURUSD",
+            "decision_time": decision_time,
+            "entry_time": decision_time,
+            "entry_bid": 1.0,
+            "entry_ask": 1.0001,
+        }
+        for horizon in (15, 30, 60):
+            label_row[f"exit_time_{horizon}m"] = decision_time + timedelta(
+                minutes=horizon
+            )
+            label_row[f"long_return_{horizon}m"] = signal / 10_000.0
+            label_row[f"short_return_{horizon}m"] = -signal / 10_000.0
+            label_row[f"action_{horizon}m"] = "long" if signal > 0 else "short"
+        label_rows.append(label_row)
+    return (
+        pa.Table.from_pylist(feature_rows, schema=FEATURE_SCHEMA),
+        pa.Table.from_pylist(label_rows, schema=label_schema((15, 30, 60))),
+    )
+
+
 def test_walk_forward_trains_only_on_purged_development_rows() -> None:
     features, labels = _tables()
 
@@ -129,6 +198,85 @@ def test_future_validation_row_cannot_change_earlier_prediction() -> None:
     changed = run_walk_forward(changed_features, labels, _plan(), _config())
 
     assert changed.slice(0, 5).equals(original.slice(0, 5))
+
+
+def test_v2_uses_purged_calibration_and_reproducible_actions() -> None:
+    features, labels = _v2_tables()
+
+    predictions = run_walk_forward(
+        features, labels, _v2_plan(), _v2_config()
+    )
+
+    assert predictions.num_rows == 18
+    assert predictions.schema.metadata is not None
+    assert (
+        predictions.schema.metadata[b"demofml.prediction_set"]
+        == PREDICTION_SET_V3_ID.encode()
+    )
+    assert set(predictions.column("model_set").to_pylist()) == {MODEL_SET_V2_ID}
+    assert set(predictions.column("calibration_rows").to_pylist()) == {24}
+    assert min(predictions.column("calibration_slope").to_pylist()) >= 0.0
+    report = evaluate_predictions(predictions)
+    assert report["prediction_set"] == PREDICTION_SET_V3_ID
+
+    rows = predictions.to_pylist()
+    rows[0]["action"] = "flat"
+    rows[0]["realized_return"] = 0.0
+    tampered = pa.Table.from_pylist(rows, schema=predictions.schema)
+    with pytest.raises(ValueError, match="action cannot be reproduced"):
+        evaluate_predictions(tampered)
+
+
+def test_v2_validation_outcomes_cannot_change_model_or_calibrator() -> None:
+    features, labels = _v2_tables()
+    original = run_walk_forward(features, labels, _v2_plan(), _v2_config())
+    changed_rows = labels.to_pylist()
+    for row in changed_rows[-6:]:
+        for horizon in (15, 30, 60):
+            row[f"long_return_{horizon}m"] *= -100.0
+            row[f"short_return_{horizon}m"] *= -100.0
+    changed_labels = pa.Table.from_pylist(changed_rows, schema=labels.schema)
+
+    changed = run_walk_forward(
+        features, changed_labels, _v2_plan(), _v2_config()
+    )
+
+    model_columns = [
+        name for name in original.column_names if name != "realized_return"
+    ]
+    assert changed.select(model_columns).equals(original.select(model_columns))
+
+
+def test_v2_calibration_outcomes_change_only_calibrated_selection() -> None:
+    features, labels = _v2_tables()
+    original = run_walk_forward(features, labels, _v2_plan(), _v2_config())
+    changed_rows = labels.to_pylist()
+    for row in changed_rows[24:48]:
+        for horizon in (15, 30, 60):
+            row[f"long_return_{horizon}m"] *= -1.0
+            row[f"short_return_{horizon}m"] *= -1.0
+    changed_labels = pa.Table.from_pylist(changed_rows, schema=labels.schema)
+
+    changed = run_walk_forward(
+        features, changed_labels, _v2_plan(), _v2_config()
+    )
+
+    for name in ("predicted_long_return", "predicted_short_return"):
+        assert changed.column(name).equals(original.column(name))
+    assert not changed.column("calibrated_selected_return").equals(
+        original.column("calibrated_selected_return")
+    )
+
+
+def test_v2_rejects_insufficient_calibration_rows() -> None:
+    features, labels = _v2_tables()
+    with pytest.raises(ValueError, match="insufficient calibration rows"):
+        run_walk_forward(
+            features,
+            labels,
+            _v2_plan(),
+            replace(_v2_config(), minimum_calibration_rows=25),
+        )
 
 
 def test_positive_threshold_can_abstain_to_flat() -> None:

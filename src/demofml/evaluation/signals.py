@@ -10,7 +10,7 @@ from typing import Any
 
 import pyarrow as pa  # type: ignore[import-untyped]
 
-from demofml.models.baseline import PREDICTION_SET_ID
+from demofml.models.baseline import PREDICTION_SET_ID, PREDICTION_SET_V3_ID
 from demofml.models.locked import LOCKED_PREDICTION_SET_ID
 
 EVALUATION_SET_ID = "executable-signal-metrics-v1"
@@ -71,10 +71,13 @@ def evaluate_predictions(predictions: pa.Table) -> dict[str, Any]:
     if missing:
         raise ValueError(f"prediction schema is missing {sorted(missing)}")
     metadata = predictions.schema.metadata or {}
-    if metadata.get(b"demofml.prediction_set") != PREDICTION_SET_ID.encode():
-        raise ValueError(f"prediction metadata is not {PREDICTION_SET_ID}")
+    prediction_set = metadata.get(b"demofml.prediction_set", b"").decode()
+    if prediction_set not in {PREDICTION_SET_ID, PREDICTION_SET_V3_ID}:
+        raise ValueError("prediction metadata is not a development prediction set")
     if predictions.num_rows == 0:
         raise ValueError("cannot evaluate empty predictions")
+    if prediction_set == PREDICTION_SET_V3_ID:
+        _validate_calibrated_actions(predictions, metadata)
     rows = predictions.select(list(_REQUIRED_COLUMNS)).to_pylist()
     aggregate: dict[int, list[dict[str, object]]] = defaultdict(list)
     by_fold: dict[tuple[str, int], list[dict[str, object]]] = defaultdict(list)
@@ -86,7 +89,7 @@ def evaluate_predictions(predictions: pa.Table) -> dict[str, Any]:
     return {
         "format_version": 1,
         "evaluation_set": EVALUATION_SET_ID,
-        "prediction_set": PREDICTION_SET_ID,
+        "prediction_set": prediction_set,
         "model_set": metadata.get(b"demofml.model_set", b"").decode(),
         "validation_set": metadata.get(b"demofml.validation_set", b"").decode(),
         "aggregate": [
@@ -107,6 +110,76 @@ def evaluate_predictions(predictions: pa.Table) -> dict[str, Any]:
         },
         "interpretation": "development_only_no_overlapping_position_accounting",
     }
+
+
+def _validate_calibrated_actions(
+    predictions: pa.Table, metadata: dict[bytes, bytes]
+) -> None:
+    fields = (
+        "calibrated_selected_return",
+        "calibration_intercept",
+        "calibration_slope",
+        "calibration_rows",
+    )
+    missing = set(fields).difference(predictions.column_names)
+    if missing:
+        raise ValueError(f"calibrated prediction schema is missing {sorted(missing)}")
+    try:
+        threshold = float(metadata[b"demofml.action_threshold_bps"]) / 10_000.0
+        minimum_rows = int(metadata[b"demofml.minimum_calibration_rows"])
+    except (KeyError, ValueError) as error:
+        raise ValueError("calibrated prediction metadata is invalid") from error
+    rows = predictions.select(
+        [
+            "fold_id",
+            "symbol",
+            "horizon_minutes",
+            "predicted_long_return",
+            "predicted_short_return",
+            *fields,
+            "action",
+        ]
+    ).to_pylist()
+    calibrators: dict[tuple[str, str, int], tuple[float, float, int]] = {}
+    for row in rows:
+        predicted_long = _number(
+            row["predicted_long_return"], "predicted_long_return"
+        )
+        predicted_short = _number(
+            row["predicted_short_return"], "predicted_short_return"
+        )
+        calibrated = _number(
+            row["calibrated_selected_return"], "calibrated_selected_return"
+        )
+        intercept = _number(row["calibration_intercept"], "calibration_intercept")
+        slope = _number(row["calibration_slope"], "calibration_slope")
+        calibration_rows = int(_number(row["calibration_rows"], "calibration_rows"))
+        if not all(
+            math.isfinite(value)
+            for value in (predicted_long, predicted_short, calibrated, intercept, slope)
+        ):
+            raise ValueError("calibrated predictions must be finite")
+        if slope < 0.0 or calibration_rows < minimum_rows:
+            raise ValueError("calibration contract is invalid")
+        expected_calibrated = intercept + slope * max(
+            predicted_long, predicted_short
+        )
+        if not math.isclose(calibrated, expected_calibrated, abs_tol=1e-15):
+            raise ValueError("calibrated return cannot be reproduced")
+        expected_action = (
+            "flat"
+            if calibrated <= threshold
+            else "long"
+            if predicted_long > predicted_short
+            else "short"
+        )
+        if row["action"] != expected_action:
+            raise ValueError("calibrated action cannot be reproduced")
+        key = (str(row["fold_id"]), str(row["symbol"]), int(row["horizon_minutes"]))
+        calibrator = (intercept, slope, calibration_rows)
+        if key in calibrators and calibrators[key] != calibrator:
+            raise ValueError("calibrator changes within a prediction cell")
+        calibrators[key] = calibrator
 
 
 def evaluate_locked_predictions(

@@ -404,6 +404,7 @@ def _run_stage(
     executions: list[StageExecution] | None = None,
 ) -> None:
     started = time.perf_counter_ns()
+    stage_label = stage if symbol is None else f"{stage} symbol={symbol}"
 
     def record_execution(
         action: str, resumed: bool, build_elapsed_ns: int | None = None
@@ -423,7 +424,7 @@ def _run_stage(
             )
 
     if _stage_is_complete(marker, fingerprint, outputs, root):
-        print(f"verified; skipping stage {marker.stem}", flush=True)
+        print(f"stage verified: {stage_label}", flush=True)
         record_execution("verified_skipped", True)
         return
     intent = marker.with_name(f"{marker.name}.intent")
@@ -449,9 +450,10 @@ def _run_stage(
                 "outputs": _output_records(outputs, root),
             },
         )
-        print(f"recovered stage {marker.stem}", flush=True)
+        print(f"stage recovered: {stage_label}", flush=True)
         record_execution("checkpoint_recovered", True)
         return
+    print(f"stage started: {stage_label}", flush=True)
     build_started = time.perf_counter_ns()
     build()
     build_elapsed_ns = time.perf_counter_ns() - build_started
@@ -464,6 +466,11 @@ def _run_stage(
         },
     )
     record_execution("executed", resumed, build_elapsed_ns)
+    print(
+        f"stage completed: {stage_label} "
+        f"elapsed_seconds={build_elapsed_ns / 1_000_000_000:.3f}",
+        flush=True,
+    )
 
 
 def _stage_fingerprint(run_id: str, stage: str, symbol: str | None = None) -> str:
@@ -869,10 +876,17 @@ def _run_development_pipeline(
                 },
             )
         if config.acceptance_config is not None:
-            publish_acceptance_report(
+            acceptance_report = publish_acceptance_report(
                 root,
                 config.acceptance_config,
                 root / "acceptance" / "development-acceptance-v1.json",
+            )
+            summary = acceptance_report["summary"]
+            print(
+                "development acceptance: "
+                f"accepted={summary['accepted']} pass={summary['pass']} "
+                f"fail={summary['fail']} blocked={summary['blocked']}",
+                flush=True,
             )
         if tracking_status == "RUNNING":
             _log_metrics(mlflow, mlflow_run_id, root)

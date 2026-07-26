@@ -434,10 +434,10 @@ Job is included yet.
 
 ## Status
 
-Phase 5 publication is in progress. Phases 6-13 contracts and pipelines are
-implemented. Phase 13 remains inactive: full development starts only after the
-immutable source manifest appears, and the locked test remains forbidden until
-development acceptance, candidate freeze and external authorization all finish.
+Phase 5 publication and the full tick audit are complete. Phases 6-13 contracts
+and pipelines are implemented. The Phase 12 full-development run completed but
+did not pass development acceptance. Phase 13 remains inactive, and the locked
+test remains forbidden.
 
 ## License
 

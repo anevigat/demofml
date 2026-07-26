@@ -24,7 +24,9 @@ from demofml.reporting.portfolio import (
 
 PROJECT_ROOT = Path(__file__).parents[2]
 PORTFOLIO_CONFIG = PROJECT_ROOT / "configs/experiments/portfolio-v1.toml"
+PORTFOLIO_V2_CONFIG = PROJECT_ROOT / "configs/experiments/portfolio-v2.toml"
 MODEL_CONFIG = PROJECT_ROOT / "configs/experiments/baseline-ridge-v1.toml"
+MODEL_V2_CONFIG = PROJECT_ROOT / "configs/experiments/baseline-ridge-v2.toml"
 VALIDATION_CONFIG = PROJECT_ROOT / "configs/experiments/purged-walk-forward-v1.toml"
 LOCKED_TEST_START = datetime(2025, 1, 1, tzinfo=UTC)
 
@@ -71,6 +73,26 @@ def _prediction_tables(
     return tables
 
 
+def _prediction_tables_v2() -> list[pa.Table]:
+    model = load_baseline_config(MODEL_V2_CONFIG)
+    schema = prediction_schema(model)
+    tables: list[pa.Table] = []
+    for table in _prediction_tables():
+        rows = table.to_pylist()
+        for row in rows:
+            row.update(
+                {
+                    "model_set": model.id,
+                    "calibrated_selected_return": row["predicted_long_return"],
+                    "calibration_intercept": row["predicted_long_return"],
+                    "calibration_slope": 0.0,
+                    "calibration_rows": model.minimum_calibration_rows,
+                }
+            )
+        tables.append(pa.Table.from_pylist(rows, schema=schema))
+    return tables
+
+
 def _replace_rows(
     tables: list[pa.Table],
     transform: Any,
@@ -110,6 +132,23 @@ def test_independent_overlapping_lots_settle_on_actual_exit_time() -> None:
     assert min(simulation.ledger.column("exit_time").to_pylist()) == datetime(
         2022, 1, 3, 0, 15, 1, tzinfo=UTC
     )
+
+
+def test_v2_selection_preserves_portfolio_accounting() -> None:
+    v1 = simulate_portfolio(_prediction_tables(), _config(), LOCKED_TEST_START)
+    v2_config = replace(
+        load_portfolio_config(PORTFOLIO_V2_CONFIG),
+        annualization_periods=1,
+        volatility_lookback_periods=4,
+        volatility_min_observations=2,
+    )
+    v2 = simulate_portfolio(
+        _prediction_tables_v2(), v2_config, LOCKED_TEST_START
+    )
+
+    assert v2.ledger.select(v1.ledger.column_names).equals(v1.ledger)
+    assert v2.equity.select(v1.equity.column_names).equals(v1.equity)
+    assert v2.period_returns == v1.period_returns
 
 
 def test_future_return_cannot_change_earlier_position_size() -> None:

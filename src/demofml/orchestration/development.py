@@ -57,8 +57,9 @@ from demofml.validation.development import isolate_development_rows
 from demofml.validation.splits import load_validation_plan
 
 PIPELINE_SET_ID = "development-pipeline-v2"
+PIPELINE_SET_V3_ID = "development-pipeline-v3"
 _SUPPORTED_PIPELINE_SETS = frozenset(
-    {"development-pipeline-v1", PIPELINE_SET_ID}
+    {"development-pipeline-v1", PIPELINE_SET_ID, PIPELINE_SET_V3_ID}
 )
 _CODE_REFERENCE_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _HASH_BLOCK_SIZE = 8 * 1024 * 1024
@@ -178,8 +179,11 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
         raise ValueError(f"invalid pipeline config field: {error}") from error
     if config.id not in _SUPPORTED_PIPELINE_SETS:
         raise ValueError("pipeline id is not supported")
-    if config.id == PIPELINE_SET_ID and config.acceptance_config is None:
-        raise ValueError("development-pipeline-v2 requires an acceptance config")
+    if (
+        config.id in {PIPELINE_SET_ID, PIPELINE_SET_V3_ID}
+        and config.acceptance_config is None
+    ):
+        raise ValueError(f"{config.id} requires an acceptance config")
     if config.id == "development-pipeline-v1" and config.acceptance_config is not None:
         raise ValueError("development-pipeline-v1 cannot define acceptance")
     if not config.symbols or tuple(sorted(set(config.symbols))) != config.symbols:
@@ -217,8 +221,15 @@ def _validate_contracts(
         acceptance.pipeline_set != config.id
         or acceptance.symbols != config.symbols
         or acceptance.horizons_minutes != portfolio.horizons_minutes
+        or acceptance.model_set != model.id
+        or acceptance.portfolio_set != portfolio.id
     ):
         raise ValueError("pipeline acceptance contract is incompatible")
+    if (
+        portfolio.model_set != model.id
+        or portfolio.prediction_set != model.prediction_set
+    ):
+        raise ValueError("pipeline model and portfolio provenance differ")
     if (
         dataset.start != plan.train_start
         or dataset.end_exclusive != plan.locked_test_start
@@ -558,6 +569,7 @@ def _log_artifacts(
     mlflow_run_id: str,
     root: Path,
     symbols: Sequence[str],
+    acceptance_path: Path | None,
 ) -> None:
     client.log_artifact(
         mlflow_run_id, str(root / "validation" / "manifest.json"), "validation"
@@ -585,12 +597,16 @@ def _log_artifacts(
         )
     client.log_artifact(mlflow_run_id, str(root / "run.json"))
     client.log_artifact(mlflow_run_id, str(root / "execution-report.json"))
-    acceptance = root / "acceptance" / "development-acceptance-v1.json"
-    if acceptance.is_file():
-        client.log_artifact(mlflow_run_id, str(acceptance), "acceptance")
+    if acceptance_path is not None and acceptance_path.is_file():
+        client.log_artifact(mlflow_run_id, str(acceptance_path), "acceptance")
 
 
-def _log_metrics(client: Any, mlflow_run_id: str, root: Path) -> None:
+def _log_metrics(
+    client: Any,
+    mlflow_run_id: str,
+    root: Path,
+    acceptance_path: Path | None,
+) -> None:
     report = json.loads((root / "portfolio" / "metrics.json").read_text())
     names = (
         "final_equity_usd",
@@ -616,8 +632,7 @@ def _log_metrics(client: Any, mlflow_run_id: str, root: Path) -> None:
         "pipeline_peak_rss_bytes",
         float(execution["process_lifetime_peak_rss_bytes_at_end"]),
     )
-    acceptance_path = root / "acceptance" / "development-acceptance-v1.json"
-    if acceptance_path.is_file():
+    if acceptance_path is not None and acceptance_path.is_file():
         acceptance = _read_json_object(acceptance_path, "Acceptance report")
         summary = acceptance["summary"]
         client.log_metric(
@@ -661,8 +676,18 @@ def _run_development_pipeline(
     config = load_pipeline_config(pipeline_config_path)
     dataset = load_development_dataset(config.dataset_config)
     plan, _ = _validate_contracts(config, dataset)
+    acceptance_config = (
+        load_acceptance_config(config.acceptance_config)
+        if config.acceptance_config is not None
+        else None
+    )
     run_id = _run_id(pipeline_config_path, config, code_reference)
     root = workdir.expanduser().resolve() / config.id / run_id
+    acceptance_path = (
+        root / "acceptance" / f"{acceptance_config.id}.json"
+        if acceptance_config is not None
+        else None
+    )
     success = root / "_SUCCESS"
     success_record: dict[str, Any] | None = None
     if success.exists() and not success.is_file():
@@ -836,10 +861,8 @@ def _run_development_pipeline(
             "development_only": True,
             "locked_test_start": plan.locked_test_start.isoformat(),
         }
-        if config.acceptance_config is not None:
-            run_record["acceptance_set"] = load_acceptance_config(
-                config.acceptance_config
-            ).id
+        if acceptance_config is not None:
+            run_record["acceptance_set"] = acceptance_config.id
         run_record_path = root / "run.json"
         if run_record_path.exists():
             existing = json.loads(run_record_path.read_text(encoding="utf-8"))
@@ -875,11 +898,11 @@ def _run_development_pipeline(
                     "stages": [asdict(execution) for execution in executions],
                 },
             )
-        if config.acceptance_config is not None:
+        if config.acceptance_config is not None and acceptance_path is not None:
             acceptance_report = publish_acceptance_report(
                 root,
                 config.acceptance_config,
-                root / "acceptance" / "development-acceptance-v1.json",
+                acceptance_path,
             )
             summary = acceptance_report["summary"]
             print(
@@ -889,8 +912,10 @@ def _run_development_pipeline(
                 flush=True,
             )
         if tracking_status == "RUNNING":
-            _log_metrics(mlflow, mlflow_run_id, root)
-            _log_artifacts(mlflow, mlflow_run_id, root, config.symbols)
+            _log_metrics(mlflow, mlflow_run_id, root, acceptance_path)
+            _log_artifacts(
+                mlflow, mlflow_run_id, root, config.symbols, acceptance_path
+            )
             mlflow.set_terminated(mlflow_run_id, status="FINISHED")
         elif tracking_status != "FINISHED":
             raise RuntimeError(f"MLflow run cannot be resumed from {tracking_status}")

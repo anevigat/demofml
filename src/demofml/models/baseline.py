@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import tomllib
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -13,7 +13,7 @@ import pyarrow as pa  # type: ignore[import-untyped]
 from numpy.typing import NDArray
 from sklearn.impute import SimpleImputer  # type: ignore[import-untyped]
 from sklearn.linear_model import Ridge  # type: ignore[import-untyped]
-from sklearn.pipeline import make_pipeline  # type: ignore[import-untyped]
+from sklearn.pipeline import Pipeline, make_pipeline  # type: ignore[import-untyped]
 from sklearn.preprocessing import StandardScaler  # type: ignore[import-untyped]
 
 from demofml.features.causal import FEATURE_SCHEMA, FEATURE_SET_ID
@@ -27,6 +27,8 @@ from demofml.validation.splits import (
 
 MODEL_SET_ID = "baseline-ridge-v1"
 PREDICTION_SET_ID = "walk-forward-predictions-v2"
+MODEL_SET_V2_ID = "baseline-ridge-v2"
+PREDICTION_SET_V3_ID = "walk-forward-predictions-v3"
 FEATURE_COLUMNS = tuple(FEATURE_SCHEMA.names[2:])
 
 
@@ -50,10 +52,15 @@ class BaselineConfig:
     random_seed: int
     locked_test_policy: str
     features: tuple[str, ...]
+    selection_policy: str = "static-threshold-v1"
+    calibration_window_months: int = 0
+    calibration_purge_minutes: int = 0
+    minimum_calibration_rows: int = 0
+    calibration_regression: str = "none"
 
     def __post_init__(self) -> None:
-        if self.id != MODEL_SET_ID:
-            raise ValueError(f"model id must be {MODEL_SET_ID}")
+        if self.id not in {MODEL_SET_ID, MODEL_SET_V2_ID}:
+            raise ValueError(f"model id must be {MODEL_SET_ID} or {MODEL_SET_V2_ID}")
         if self.feature_set != FEATURE_SET_ID or self.label_set != LABEL_SET_ID:
             raise ValueError("baseline feature and label sets are incompatible")
         if self.validation_set != VALIDATION_SET_ID:
@@ -81,10 +88,36 @@ class BaselineConfig:
             raise ValueError("locked test policy must remain forbidden")
         if self.features != FEATURE_COLUMNS:
             raise ValueError("baseline features do not match causal-v1")
+        if self.id == MODEL_SET_ID:
+            if (
+                self.selection_policy != "static-threshold-v1"
+                or self.calibration_window_months != 0
+                or self.calibration_purge_minutes != 0
+                or self.minimum_calibration_rows != 0
+                or self.calibration_regression != "none"
+            ):
+                raise ValueError("baseline-ridge-v1 cannot define calibration")
+        elif (
+            self.selection_policy != "purged-tail-monotone-affine-v1"
+            or self.calibration_window_months != 1
+            or self.calibration_purge_minutes != 65
+            or self.minimum_calibration_rows < 2
+            or self.calibration_regression != "ols_nonnegative_slope"
+        ):
+            raise ValueError("baseline-ridge-v2 calibration contract is incompatible")
 
     @property
     def action_threshold(self) -> float:
         return self.action_threshold_bps / 10_000.0
+
+    @property
+    def prediction_set(self) -> str:
+        """Return the prediction contract emitted by this model version."""
+        return (
+            PREDICTION_SET_ID
+            if self.id == MODEL_SET_ID
+            else PREDICTION_SET_V3_ID
+        )
 
 
 @dataclass(frozen=True)
@@ -125,6 +158,17 @@ def load_baseline_config(path: Path) -> BaselineConfig:
             random_seed=int(values["random_seed"]),
             locked_test_policy=str(values["locked_test_policy"]),
             features=tuple(str(value) for value in values["features"]),
+            selection_policy=str(
+                values.get("selection_policy", "static-threshold-v1")
+            ),
+            calibration_window_months=int(
+                values.get("calibration_window_months", 0)
+            ),
+            calibration_purge_minutes=int(
+                values.get("calibration_purge_minutes", 0)
+            ),
+            minimum_calibration_rows=int(values.get("minimum_calibration_rows", 0)),
+            calibration_regression=str(values.get("calibration_regression", "none")),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError(f"invalid baseline config field: {error}") from error
@@ -132,6 +176,16 @@ def load_baseline_config(path: Path) -> BaselineConfig:
 
 def prediction_schema(config: BaselineConfig) -> pa.Schema:
     """Build the prediction schema with complete model provenance."""
+    calibration_fields = (
+        [
+            pa.field("calibrated_selected_return", pa.float64(), nullable=False),
+            pa.field("calibration_intercept", pa.float64(), nullable=False),
+            pa.field("calibration_slope", pa.float64(), nullable=False),
+            pa.field("calibration_rows", pa.int32(), nullable=False),
+        ]
+        if config.id == MODEL_SET_V2_ID
+        else []
+    )
     return pa.schema(
         [
             pa.field("model_set", pa.string(), nullable=False),
@@ -144,11 +198,12 @@ def prediction_schema(config: BaselineConfig) -> pa.Schema:
             pa.field("horizon_minutes", pa.int16(), nullable=False),
             pa.field("predicted_long_return", pa.float64(), nullable=False),
             pa.field("predicted_short_return", pa.float64(), nullable=False),
+            *calibration_fields,
             pa.field("action", pa.string(), nullable=False),
             pa.field("realized_return", pa.float64(), nullable=False),
         ],
         metadata={
-            b"demofml.prediction_set": PREDICTION_SET_ID.encode(),
+            b"demofml.prediction_set": config.prediction_set.encode(),
             b"demofml.model_set": config.id.encode(),
             b"demofml.feature_set": config.feature_set.encode(),
             b"demofml.label_set": config.label_set.encode(),
@@ -158,6 +213,17 @@ def prediction_schema(config: BaselineConfig) -> pa.Schema:
             ).encode(),
             b"demofml.action_threshold_bps": str(config.action_threshold_bps).encode(),
             b"demofml.random_seed": str(config.random_seed).encode(),
+            b"demofml.selection_policy": config.selection_policy.encode(),
+            b"demofml.calibration_window_months": str(
+                config.calibration_window_months
+            ).encode(),
+            b"demofml.calibration_purge_minutes": str(
+                config.calibration_purge_minutes
+            ).encode(),
+            b"demofml.minimum_calibration_rows": str(
+                config.minimum_calibration_rows
+            ).encode(),
+            b"demofml.calibration_regression": config.calibration_regression.encode(),
         },
     )
 
@@ -271,20 +337,87 @@ def _fit_predict(
     return np.asarray(model.predict(validation_features), dtype=float)
 
 
+def _fit_ridge(
+    training_features: NDArray[np.float64],
+    training_targets: NDArray[np.float64],
+    config: BaselineConfig,
+) -> Pipeline:
+    model = make_pipeline(
+        SimpleImputer(strategy="median", keep_empty_features=True),
+        StandardScaler(),
+        Ridge(alpha=config.alpha, solver="lsqr"),
+    )
+    model.fit(training_features, training_targets)
+    return model
+
+
+def _predict(
+    model: Pipeline, features: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    predictions = np.asarray(model.predict(features), dtype=float)
+    if predictions.ndim != 2 or predictions.shape[1] != 2:
+        raise RuntimeError("ridge produced an invalid prediction matrix")
+    if not np.isfinite(predictions).all():
+        raise RuntimeError("ridge produced a non-finite prediction")
+    return predictions
+
+
+def _fit_monotone_affine_calibrator(
+    scores: NDArray[np.float64], outcomes: NDArray[np.float64]
+) -> tuple[float, float]:
+    """Fit deterministic OLS while forbidding a negative score slope."""
+    if scores.ndim != 1 or outcomes.ndim != 1 or scores.shape != outcomes.shape:
+        raise ValueError("calibration scores and outcomes must be aligned vectors")
+    if (
+        scores.size == 0
+        or not np.isfinite(scores).all()
+        or not np.isfinite(outcomes).all()
+    ):
+        raise ValueError("calibration values must be non-empty and finite")
+    score_mean = float(np.mean(scores))
+    outcome_mean = float(np.mean(outcomes))
+    centered_scores = scores - score_mean
+    denominator = float(centered_scores @ centered_scores)
+    slope = (
+        0.0
+        if denominator == 0.0
+        else max(
+            float(centered_scores @ (outcomes - outcome_mean)) / denominator,
+            0.0,
+        )
+    )
+    intercept = outcome_mean - slope * score_mean
+    if not math.isfinite(intercept) or not math.isfinite(slope):
+        raise RuntimeError("calibration produced non-finite coefficients")
+    return intercept, slope
+
+
+def _previous_month_start(value: datetime) -> datetime:
+    if value.month == 1:
+        return value.replace(year=value.year - 1, month=12)
+    return value.replace(month=value.month - 1)
+
+
+def _resolved_indices(
+    indices: NDArray[np.int64],
+    long_targets: NDArray[np.float64],
+    short_targets: NDArray[np.float64],
+) -> NDArray[np.int64]:
+    mask = np.isfinite(long_targets[indices]) & np.isfinite(short_targets[indices])
+    return indices[mask]
+
+
 def _action(long_prediction: float, short_prediction: float, threshold: float) -> str:
     if max(long_prediction, short_prediction) <= threshold:
         return "flat"
     return "long" if long_prediction > short_prediction else "short"
 
 
-def run_walk_forward(
-    features: pa.Table,
-    labels: pa.Table,
+def _run_walk_forward_v1(
+    data: AlignedResearchData,
     plan: ValidationPlan,
     config: BaselineConfig,
 ) -> pa.Table:
-    """Train and score every development fold without touching the lock."""
-    data = align_research_tables(features, labels, plan, config)
     rows: list[dict[str, object]] = []
     for fold in plan.folds():
         selection = select_fold_rows(data.decision_times, fold)
@@ -369,3 +502,148 @@ def run_walk_forward(
                     }
                 )
     return pa.Table.from_pylist(rows, schema=prediction_schema(config))
+
+
+def _run_walk_forward_v2(
+    data: AlignedResearchData,
+    plan: ValidationPlan,
+    config: BaselineConfig,
+) -> pa.Table:
+    rows: list[dict[str, object]] = []
+    for fold in plan.folds():
+        selection = select_fold_rows(data.decision_times, fold)
+        if not selection.validation:
+            raise ValueError(f"fold {fold.id} has no validation rows")
+        calibration_start = _previous_month_start(fold.validation_start)
+        fit_end = calibration_start - timedelta(
+            minutes=config.calibration_purge_minutes
+        )
+        fit_candidates = np.asarray(
+            [
+                index
+                for index in selection.train
+                if data.decision_times[index] < fit_end
+            ],
+            dtype=np.int64,
+        )
+        calibration_candidates = np.asarray(
+            [
+                index
+                for index in selection.train
+                if data.decision_times[index] >= calibration_start
+            ],
+            dtype=np.int64,
+        )
+        validation_indices = np.asarray(selection.validation, dtype=np.int64)
+        for horizon in config.horizons_minutes:
+            long_targets = data.long_targets[horizon]
+            short_targets = data.short_targets[horizon]
+
+            usable_fit = _resolved_indices(
+                fit_candidates, long_targets, short_targets
+            )
+            usable_calibration = _resolved_indices(
+                calibration_candidates, long_targets, short_targets
+            )
+            usable_validation = _resolved_indices(
+                validation_indices, long_targets, short_targets
+            )
+            if usable_fit.size < config.minimum_training_rows:
+                raise ValueError(
+                    f"fold {fold.id} horizon {horizon} has insufficient fit rows"
+                )
+            if usable_calibration.size < config.minimum_calibration_rows:
+                raise ValueError(
+                    f"fold {fold.id} horizon {horizon} has insufficient "
+                    "calibration rows"
+                )
+            if usable_validation.size == 0:
+                raise ValueError(
+                    f"fold {fold.id} horizon {horizon} has no resolved "
+                    "validation labels"
+                )
+            fit_targets = np.column_stack(
+                [long_targets[usable_fit], short_targets[usable_fit]]
+            )
+            model = _fit_ridge(data.features[usable_fit], fit_targets, config)
+            calibration_predictions = _predict(
+                model, data.features[usable_calibration]
+            )
+            calibration_long = (
+                calibration_predictions[:, 0] > calibration_predictions[:, 1]
+            )
+            calibration_scores = np.max(calibration_predictions, axis=1)
+            calibration_outcomes = np.where(
+                calibration_long,
+                long_targets[usable_calibration],
+                short_targets[usable_calibration],
+            )
+            intercept, slope = _fit_monotone_affine_calibrator(
+                calibration_scores, calibration_outcomes
+            )
+            predictions = _predict(model, data.features[usable_validation])
+            for row_index, prediction in zip(
+                usable_validation, predictions, strict=True
+            ):
+                predicted_long = float(prediction[0])
+                predicted_short = float(prediction[1])
+                calibrated = intercept + slope * max(
+                    predicted_long, predicted_short
+                )
+                action = (
+                    "flat"
+                    if calibrated <= config.action_threshold
+                    else "long"
+                    if predicted_long > predicted_short
+                    else "short"
+                )
+                entry_time = data.entry_times[row_index]
+                exit_time = data.exit_times[horizon][row_index]
+                decision_time = data.decision_times[row_index]
+                if (
+                    not isinstance(entry_time, datetime)
+                    or not isinstance(exit_time, datetime)
+                    or not decision_time <= entry_time < exit_time
+                ):
+                    raise RuntimeError("resolved label execution times are invalid")
+                realized = (
+                    float(long_targets[row_index])
+                    if action == "long"
+                    else float(short_targets[row_index])
+                    if action == "short"
+                    else 0.0
+                )
+                rows.append(
+                    {
+                        "model_set": config.id,
+                        "validation_set": plan.id,
+                        "fold_id": fold.id,
+                        "symbol": data.symbol,
+                        "decision_time": decision_time,
+                        "entry_time": entry_time,
+                        "exit_time": exit_time,
+                        "horizon_minutes": horizon,
+                        "predicted_long_return": predicted_long,
+                        "predicted_short_return": predicted_short,
+                        "calibrated_selected_return": calibrated,
+                        "calibration_intercept": intercept,
+                        "calibration_slope": slope,
+                        "calibration_rows": int(usable_calibration.size),
+                        "action": action,
+                        "realized_return": realized,
+                    }
+                )
+    return pa.Table.from_pylist(rows, schema=prediction_schema(config))
+
+
+def run_walk_forward(
+    features: pa.Table,
+    labels: pa.Table,
+    plan: ValidationPlan,
+    config: BaselineConfig,
+) -> pa.Table:
+    """Train and score every development fold without touching the lock."""
+    data = align_research_tables(features, labels, plan, config)
+    if config.id == MODEL_SET_ID:
+        return _run_walk_forward_v1(data, plan, config)
+    return _run_walk_forward_v2(data, plan, config)

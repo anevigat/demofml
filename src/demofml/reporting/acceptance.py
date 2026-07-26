@@ -23,18 +23,40 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 from demofml.evaluation.portfolio import (
     PORTFOLIO_HORIZONS,
     PORTFOLIO_SET_ID,
+    PORTFOLIO_SET_V2_ID,
     PORTFOLIO_SYMBOLS,
     load_portfolio_config,
     simulate_portfolio,
 )
 from demofml.evaluation.signals import evaluate_predictions
-from demofml.models.baseline import MODEL_SET_ID, PREDICTION_SET_ID
+from demofml.models.baseline import (
+    MODEL_SET_ID,
+    MODEL_SET_V2_ID,
+    PREDICTION_SET_ID,
+    PREDICTION_SET_V3_ID,
+)
 from demofml.reporting.portfolio import portfolio_report
 from demofml.validation.splits import VALIDATION_SET_ID
 
 ACCEPTANCE_SET_ID = "development-acceptance-v1"
 PIPELINE_SET_ID = "development-pipeline-v2"
+ACCEPTANCE_SET_V2_ID = "development-acceptance-v2"
+PIPELINE_SET_V3_ID = "development-pipeline-v3"
 DATASET_SET_ID = "cleaned-ticks-development-v1"
+_ACCEPTANCE_PROVENANCE = {
+    ACCEPTANCE_SET_ID: (
+        PIPELINE_SET_ID,
+        MODEL_SET_ID,
+        PORTFOLIO_SET_ID,
+        PREDICTION_SET_ID,
+    ),
+    ACCEPTANCE_SET_V2_ID: (
+        PIPELINE_SET_V3_ID,
+        MODEL_SET_V2_ID,
+        PORTFOLIO_SET_V2_ID,
+        PREDICTION_SET_V3_ID,
+    ),
+}
 _HASH_BLOCK_SIZE = 8 * 1024 * 1024
 _LOCKED_TEST_START = "2025-01-01T00:00:00+00:00"
 _RUN_ID_PATTERN = re.compile(r"^sha256-[0-9a-f]{64}$")
@@ -135,13 +157,16 @@ def load_acceptance_config(path: Path) -> AcceptanceConfig:
         )
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError(f"invalid acceptance config field: {error}") from error
+    provenance = _ACCEPTANCE_PROVENANCE.get(config.id)
+    if provenance is None:
+        raise ValueError("acceptance id is not supported")
+    pipeline_set, model_set, portfolio_set, _ = provenance
     if (
-        config.id != ACCEPTANCE_SET_ID
-        or config.pipeline_set != PIPELINE_SET_ID
+        config.pipeline_set != pipeline_set
         or config.dataset_set != DATASET_SET_ID
         or config.validation_set != VALIDATION_SET_ID
-        or config.model_set != MODEL_SET_ID
-        or config.portfolio_set != PORTFOLIO_SET_ID
+        or config.model_set != model_set
+        or config.portfolio_set != portfolio_set
     ):
         raise ValueError("acceptance provenance is incompatible")
     if not config.portfolio_config.is_file():
@@ -570,6 +595,7 @@ def _prediction_timestamps_are_safe(
     root: Path, config: AcceptanceConfig
 ) -> bool:
     locked_start = np.datetime64("2025-01-01T00:00:00", "ns")
+    prediction_set = _ACCEPTANCE_PROVENANCE[config.id][3]
     for symbol in config.symbols:
         parquet = pq.ParquetFile(
             root / "symbols" / symbol / "baseline" / "predictions.parquet"
@@ -577,7 +603,7 @@ def _prediction_timestamps_are_safe(
         metadata = parquet.schema_arrow.metadata or {}
         if (
             metadata.get(b"demofml.prediction_set")
-            != PREDICTION_SET_ID.encode()
+            != prediction_set.encode()
             or
             metadata.get(b"demofml.model_set") != config.model_set.encode()
             or metadata.get(b"demofml.validation_set")
@@ -1249,8 +1275,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--acceptance-config", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     arguments = parser.parse_args(argv)
+    config = load_acceptance_config(arguments.acceptance_config)
     output = arguments.output or (
-        arguments.run_root / "acceptance" / f"{ACCEPTANCE_SET_ID}.json"
+        arguments.run_root / "acceptance" / f"{config.id}.json"
     )
     try:
         report = publish_acceptance_report(

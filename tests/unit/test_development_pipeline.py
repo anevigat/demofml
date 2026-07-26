@@ -9,6 +9,7 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import pytest
 
 import demofml.orchestration.development as development_module
+from demofml.data.remote import load_development_dataset
 from demofml.evaluation.signals import evaluate_predictions
 from demofml.features.causal import FEATURE_SCHEMA
 from demofml.labels.executable import label_schema
@@ -30,6 +31,7 @@ from demofml.validation.splits import load_validation_plan
 
 PROJECT_ROOT = Path(__file__).parents[2]
 PIPELINE_CONFIG = PROJECT_ROOT / "configs/experiments/development-pipeline-v2.toml"
+PIPELINE_V3_CONFIG = PROJECT_ROOT / "configs/experiments/development-pipeline-v3.toml"
 VALIDATION_CONFIG = PROJECT_ROOT / "configs/experiments/purged-walk-forward-v1.toml"
 MODEL_CONFIG = PROJECT_ROOT / "configs/experiments/baseline-ridge-v1.toml"
 
@@ -161,6 +163,18 @@ def test_pipeline_config_binds_all_research_contracts() -> None:
     assert len(config.referenced_configs) == 7
     assert config.locked_test_policy == "forbidden"
 
+    calibrated = load_pipeline_config(PIPELINE_V3_CONFIG)
+    assert calibrated.id == "development-pipeline-v3"
+    assert calibrated.model_config.name == "baseline-ridge-v2.toml"
+    assert calibrated.portfolio_config.name == "portfolio-v2.toml"
+    assert calibrated.acceptance_config is not None
+    assert calibrated.acceptance_config.name == "development-acceptance-v2.toml"
+    _, portfolio = development_module._validate_contracts(
+        calibrated,
+        load_development_dataset(calibrated.dataset_config),
+    )
+    assert portfolio.model_set == "baseline-ridge-v2"
+
 
 def test_published_phase_11_pipeline_config_remains_loadable() -> None:
     config = load_pipeline_config(
@@ -249,8 +263,27 @@ def test_pipeline_lock_rejects_concurrent_attempt(tmp_path: Path) -> None:
         pytest.fail("second attempt must not acquire the lock")
 
 
+@pytest.mark.parametrize(
+    ("pipeline_config", "acceptance_config", "acceptance_file"),
+    [
+        (
+            PIPELINE_CONFIG,
+            PROJECT_ROOT / "configs/experiments/development-acceptance-v1.toml",
+            "development-acceptance-v1.json",
+        ),
+        (
+            PIPELINE_V3_CONFIG,
+            PROJECT_ROOT / "configs/experiments/development-acceptance-v2.toml",
+            "development-acceptance-v2.json",
+        ),
+    ],
+)
 def test_pipeline_runs_all_stages_once_and_then_is_idempotent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pipeline_config: Path,
+    acceptance_config: Path,
+    acceptance_file: str,
 ) -> None:
     calls: list[str] = []
 
@@ -300,6 +333,7 @@ def test_pipeline_runs_all_stages_once_and_then_is_idempotent(
         output = arguments[-1]
         output.mkdir(parents=True)
         symbol = output.parent.name
+        model = load_baseline_config(arguments[-2])
         start = datetime(2022, 1, 3, tzinfo=UTC)
         prediction_rows = []
         for fold_index in range(36):
@@ -309,7 +343,7 @@ def test_pipeline_runs_all_stages_once_and_then_is_idempotent(
                 for horizon in (15, 30, 60):
                     prediction_rows.append(
                         {
-                            "model_set": "baseline-ridge-v1",
+                            "model_set": model.id,
                             "validation_set": "purged-walk-forward-v1",
                             "fold_id": fold_id,
                             "symbol": symbol,
@@ -324,9 +358,18 @@ def test_pipeline_runs_all_stages_once_and_then_is_idempotent(
                             "realized_return": 0.0001,
                         }
                     )
+                    if model.id == "baseline-ridge-v2":
+                        prediction_rows[-1].update(
+                            {
+                                "calibrated_selected_return": 0.0002,
+                                "calibration_intercept": 0.0002,
+                                "calibration_slope": 0.0,
+                                "calibration_rows": model.minimum_calibration_rows,
+                            }
+                        )
         prediction_table = pa.Table.from_pylist(
             prediction_rows,
-            schema=prediction_schema(load_baseline_config(MODEL_CONFIG)),
+            schema=prediction_schema(model),
         )
         pq.write_table(prediction_table, output / "predictions.parquet")
         (output / "metrics.json").write_text(
@@ -362,7 +405,7 @@ def test_pipeline_runs_all_stages_once_and_then_is_idempotent(
     tracking = _Mlflow()
 
     result = run_development_pipeline(
-        PIPELINE_CONFIG,
+        pipeline_config,
         tmp_path / "work",
         "sha256:" + "a" * 64,
         "data",
@@ -373,7 +416,7 @@ def test_pipeline_runs_all_stages_once_and_then_is_idempotent(
         mlflow=tracking,
     )
     repeated = run_development_pipeline(
-        PIPELINE_CONFIG,
+        pipeline_config,
         tmp_path / "work",
         "sha256:" + "a" * 64,
         "data",
@@ -395,7 +438,7 @@ def test_pipeline_runs_all_stages_once_and_then_is_idempotent(
         (
             result.output
             / "acceptance"
-            / "development-acceptance-v1.json"
+            / acceptance_file
         ).read_text()
     )
     assert len(execution["stages"]) == 42
@@ -412,7 +455,7 @@ def test_pipeline_runs_all_stages_once_and_then_is_idempotent(
     with pytest.raises(RuntimeError, match="Execution profile is invalid"):
         evaluate_development_run(
             result.output,
-            PROJECT_ROOT / "configs/experiments/development-acceptance-v1.toml",
+            acceptance_config,
         )
     execution_path.write_text(json.dumps(execution))
 
@@ -426,7 +469,7 @@ def test_pipeline_runs_all_stages_once_and_then_is_idempotent(
     portfolio_metrics.write_text(json.dumps(rejected_metrics))
     rejected = evaluate_development_run(
         result.output,
-        PROJECT_ROOT / "configs/experiments/development-acceptance-v1.toml",
+        acceptance_config,
     )
 
     assert rejected["summary"]["accepted"] is False

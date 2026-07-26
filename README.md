@@ -371,6 +371,20 @@ zero and the locked test remains forbidden. Every run also writes an
 `execution-report.json` with stage action, elapsed nanoseconds, output bytes and
 rows, and process peak RSS. The report contains no raw object paths.
 
+Follow-up model set `baseline-ridge-v2` preserves the ridge, features, labels,
+walk-forward folds, portfolio rules and acceptance thresholds. It fits a
+non-negative affine calibrator on one purged month before each validation fold
+and trades only when the calibrated executable return is positive. Its
+development replay was also rejected: all three horizon means remained
+negative, only eight folds per horizon were positive, and the portfolio returned
+-7.19%. This result must not be promoted to the locked test.
+
+An additive spline-ridge hypothesis was screened using only pre-2022 data before
+any further walk-forward run. It made the already negative 30- and 60-minute
+means materially worse and was not promoted to a versioned candidate. The
+current feature set therefore has no demonstrated stable executable signal under
+either the linear ridge or the screened nonlinear transformation.
+
 Re-evaluate an existing run without rebuilding it:
 
 ```bash
@@ -435,9 +449,10 @@ Job is included yet.
 ## Status
 
 Phase 5 publication and the full tick audit are complete. Phases 6-13 contracts
-and pipelines are implemented. The Phase 12 full-development run completed but
-did not pass development acceptance. Phase 13 remains inactive, and the locked
-test remains forbidden.
+and pipelines are implemented. The Phase 12 full-development run and the
+development-only calibrated follow-up both failed the unchanged acceptance
+criteria; the pre-2022 nonlinear screen also failed. Phase 13 remains inactive,
+and the locked test remains forbidden.
 
 ## License
 

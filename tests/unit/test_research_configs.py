@@ -4,6 +4,7 @@ from pathlib import Path
 from demofml.evaluation.portfolio import (
     PORTFOLIO_HORIZONS,
     PORTFOLIO_SET_ID,
+    PORTFOLIO_SET_V2_ID,
     PORTFOLIO_SYMBOLS,
     load_portfolio_config,
 )
@@ -14,13 +15,23 @@ from demofml.labels.executable import (
     LABEL_SET_ID,
     MAX_QUOTE_LATENCY_MINUTES,
 )
-from demofml.models.baseline import FEATURE_COLUMNS, MODEL_SET_ID, load_baseline_config
+from demofml.models.baseline import (
+    FEATURE_COLUMNS,
+    MODEL_SET_ID,
+    MODEL_SET_V2_ID,
+    PREDICTION_SET_V3_ID,
+    load_baseline_config,
+)
 from demofml.orchestration.locked import (
     LOCKED_TEST_SET_ID,
     ONE_SHOT_POLICY,
     load_locked_test_config,
 )
-from demofml.reporting.acceptance import ACCEPTANCE_SET_ID, load_acceptance_config
+from demofml.reporting.acceptance import (
+    ACCEPTANCE_SET_ID,
+    ACCEPTANCE_SET_V2_ID,
+    load_acceptance_config,
+)
 from demofml.validation.splits import (
     INTERVAL_SEMANTICS,
     VALIDATION_SET_ID,
@@ -78,6 +89,16 @@ def test_baseline_config_matches_implementation() -> None:
     assert config.action_threshold_bps == 0.0
     assert config.locked_test_policy == "forbidden"
 
+    calibrated = load_baseline_config(
+        PROJECT_ROOT / "configs/experiments/baseline-ridge-v2.toml"
+    )
+    assert calibrated.id == MODEL_SET_V2_ID
+    assert calibrated.prediction_set == PREDICTION_SET_V3_ID
+    assert calibrated.features == config.features
+    assert calibrated.alpha == config.alpha
+    assert calibrated.calibration_window_months == 1
+    assert calibrated.calibration_purge_minutes == 65
+
 
 def test_portfolio_config_matches_implementation() -> None:
     path = PROJECT_ROOT / "configs/experiments/portfolio-v1.toml"
@@ -89,6 +110,14 @@ def test_portfolio_config_matches_implementation() -> None:
     assert config.initial_capital_usd == 100_000.0
     assert config.target_annual_volatility == 0.10
     assert config.maximum_drawdown == 0.10
+
+    calibrated = load_portfolio_config(
+        PROJECT_ROOT / "configs/experiments/portfolio-v2.toml"
+    )
+    assert calibrated.id == PORTFOLIO_SET_V2_ID
+    assert calibrated.prediction_set == PREDICTION_SET_V3_ID
+    assert calibrated.initial_capital_usd == config.initial_capital_usd
+    assert calibrated.maximum_drawdown == config.maximum_drawdown
 
 
 def test_development_acceptance_is_frozen_before_execution() -> None:
@@ -103,6 +132,23 @@ def test_development_acceptance_is_frozen_before_execution() -> None:
     assert config.expected_authorized_files == 14
     assert config.expected_source_rows == 1_624_981_795
     assert config.locked_test_policy == "forbidden"
+
+    calibrated = load_acceptance_config(
+        PROJECT_ROOT / "configs/experiments/development-acceptance-v2.toml"
+    )
+    assert calibrated.id == ACCEPTANCE_SET_V2_ID
+    assert calibrated.minimum_positive_folds_per_horizon == (
+        config.minimum_positive_folds_per_horizon
+    )
+    assert calibrated.minimum_positive_symbols_per_horizon == (
+        config.minimum_positive_symbols_per_horizon
+    )
+    assert calibrated.minimum_trades_per_symbol_horizon == (
+        config.minimum_trades_per_symbol_horizon
+    )
+    assert calibrated.minimum_total_return_exclusive == (
+        config.minimum_total_return_exclusive
+    )
 
 
 def test_locked_test_protocol_is_frozen_before_candidate_selection() -> None:

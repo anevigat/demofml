@@ -144,7 +144,9 @@ def run_portfolio_evaluation(
     if plan.id != config.validation_set:
         raise ValueError("portfolio and temporal validation sets differ")
     tables = (pq.read_table(path) for path in paths)
-    simulation = simulate_portfolio(tables, config, plan.locked_test_start)
+    simulation = simulate_portfolio(
+        tables, config, plan.development_end_exclusive
+    )
     report = portfolio_report(simulation, config)
 
     output.parent.mkdir(parents=True, exist_ok=True)

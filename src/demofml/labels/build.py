@@ -15,6 +15,8 @@ from demofml.bars.quotes import validate_quote_bar_schema
 from demofml.data.progress import ProgressBar
 from demofml.labels.executable import (
     DEFAULT_HORIZONS_MINUTES,
+    LABEL_SET_ID,
+    LABEL_SET_V2_ID,
     ExecutableLabelBuilder,
 )
 
@@ -32,6 +34,8 @@ def build_labels(
     output: Path,
     horizons_minutes: Sequence[int] = DEFAULT_HORIZONS_MINUTES,
     minimum_return_bps: float = 0.0,
+    *,
+    label_set: str = LABEL_SET_ID,
 ) -> LabelBuildResult:
     """Build labels from one symbol's quote bars and publish atomically."""
     source = source.expanduser().resolve()
@@ -42,8 +46,19 @@ def build_labels(
         raise RuntimeError(f"Refusing to replace existing labels: {output}")
 
     parquet = pq.ParquetFile(source)
-    validate_quote_bar_schema(parquet.schema_arrow)
-    builder = ExecutableLabelBuilder(horizons_minutes, minimum_return_bps)
+    if label_set == LABEL_SET_ID:
+        validate_quote_bar_schema(parquet.schema_arrow)
+    elif label_set == LABEL_SET_V2_ID:
+        from demofml.bars.quotes_v2 import validate_quote_bar_v2_schema
+
+        validate_quote_bar_v2_schema(parquet.schema_arrow)
+    else:
+        raise ValueError(f"unsupported label set: {label_set}")
+    builder = ExecutableLabelBuilder(
+        horizons_minutes,
+        minimum_return_bps,
+        label_set=label_set,
+    )
     progress = ProgressBar("labels", parquet.metadata.num_rows)
     output.parent.mkdir(parents=True, exist_ok=True)
     partial = output.with_name(f".{output.name}.{uuid.uuid4().hex}.partial")
@@ -121,6 +136,11 @@ def _parser() -> argparse.ArgumentParser:
         default=DEFAULT_HORIZONS_MINUTES,
     )
     parser.add_argument("--minimum-return-bps", type=float, default=0.0)
+    parser.add_argument(
+        "--label-set",
+        choices=(LABEL_SET_ID, LABEL_SET_V2_ID),
+        default=LABEL_SET_ID,
+    )
     return parser
 
 
@@ -134,6 +154,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             arguments.output,
             arguments.horizons_minutes,
             arguments.minimum_return_bps,
+            label_set=arguments.label_set,
         )
         print(
             f"built {result.output_rows} label rows from "

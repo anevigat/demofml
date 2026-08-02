@@ -11,6 +11,10 @@ from pathlib import Path
 import pyarrow as pa  # type: ignore[import-untyped]
 
 VALIDATION_SET_ID = "purged-walk-forward-v1"
+SCREEN_VALIDATION_SET_ID = "causal-v2-screen-2021-v1"
+_SUPPORTED_VALIDATION_SETS = frozenset(
+    {VALIDATION_SET_ID, SCREEN_VALIDATION_SET_ID}
+)
 VALIDATION_STRATEGY = "expanding"
 INTERVAL_SEMANTICS = "half_open_utc"
 
@@ -110,8 +114,8 @@ class ValidationPlan:
             "locked_test_end_exclusive",
         ):
             _require_utc(getattr(self, name), name)
-        if self.id != VALIDATION_SET_ID:
-            raise ValueError(f"validation id must be {VALIDATION_SET_ID}")
+        if self.id not in _SUPPORTED_VALIDATION_SETS:
+            raise ValueError("validation id is not supported")
         if self.strategy != VALIDATION_STRATEGY:
             raise ValueError("only expanding walk-forward validation is supported")
         if self.interval_semantics != INTERVAL_SEMANTICS:
@@ -133,8 +137,30 @@ class ValidationPlan:
             raise ValueError("initial training interval must be non-empty")
         if not self.first_validation_start < self.development_end_exclusive:
             raise ValueError("development validation interval must be non-empty")
-        if self.development_end_exclusive != self.locked_test_start:
-            raise ValueError("development must end exactly when the locked test starts")
+        if self.id == VALIDATION_SET_ID:
+            if self.development_end_exclusive != self.locked_test_start:
+                raise ValueError(
+                    "development must end exactly when the locked test starts"
+                )
+        elif (
+            self.feature_set != "causal-v2"
+            or self.label_set != "executable-v2"
+            or self.train_start != datetime(2018, 1, 1, tzinfo=UTC)
+            or self.first_validation_start != datetime(2021, 1, 1, tzinfo=UTC)
+            or self.validation_window_months != 12
+            or self.step_months != 12
+            or self.development_end_exclusive
+            != datetime(2022, 1, 1, tzinfo=UTC)
+            or self.purge_minutes != 65
+            or self.max_horizon_minutes != 60
+            or self.max_quote_latency_minutes != 5
+            or self.locked_test_start != datetime(2025, 1, 1, tzinfo=UTC)
+            or self.locked_test_end_exclusive
+            != datetime(2026, 3, 11, tzinfo=UTC)
+        ):
+            raise ValueError("causal-v2 screen contract is incompatible")
+        if self.development_end_exclusive > self.locked_test_start:
+            raise ValueError("development cannot overlap the locked test")
         if not self.locked_test_start < self.locked_test_end_exclusive:
             raise ValueError("locked test interval must be non-empty")
         if self.development_decision_end <= self.first_validation_start:
@@ -152,7 +178,7 @@ class ValidationPlan:
     @property
     def development_decision_end(self) -> datetime:
         """Last exclusive decision boundary that cannot read locked-test data."""
-        return self.locked_test_start - self.information_window
+        return self.development_end_exclusive - self.information_window
 
     @property
     def locked_test_decision_end(self) -> datetime:

@@ -393,6 +393,54 @@ demofml evaluate-development \
   --acceptance-config configs/experiments/development-acceptance-v1.toml
 ```
 
+## Next Research Phase: Tick Microstructure Features
+
+The next hypothesis adds information discarded by `quote-bars-v1`, rather than
+changing the model or tuning an action threshold. A new `quote-bars-v2` contract
+will aggregate causal intrabar bid/ask update imbalance, mid-price upticks versus
+downticks, spread widening versus narrowing, and quote inter-arrival dispersion.
+`causal-v2` will expose fixed 15- and 60-minute trailing summaries of those
+quantities alongside the existing features.
+
+The first screen is restricted to development history before 2022. It trains on
+`[2018-01-01, 2021-01-01)` and evaluates `[2021-01-01, 2022-01-01)`, preserving
+the 65-minute information purge. The ridge specification, executable labels,
+symbols, horizons, portfolio accounting and zero-bps action threshold remain
+unchanged so the feature contribution is isolated. No feature, window or model
+selection may use 2022-2024 or locked-test outcomes.
+
+Promotion to a new immutable full walk-forward contract requires, on the 2021
+screen, a positive pooled executable mean at all three horizons, at least six of
+eight positive symbols at every horizon, and at least 100 trades in every
+symbol/horizon cell. If any screen condition fails, this research line stops. If
+all pass, the feature contract is frozen before one 2022-2024 walk-forward run,
+which remains subject to the unchanged Phase 12 acceptance gates. The locked
+test remains forbidden throughout.
+
+The implementation is frozen before execution. The versioned contracts are
+`quote-bars-v2`, `causal-v2`, `executable-v2`,
+`causal-v2-screen-2021-v1`, `baseline-ridge-v3`,
+`normalized-sleeve-portfolio-v3`, and
+`microstructure-screen-acceptance-v1`. Label formulas, ridge parameters,
+symbols, horizons, action threshold and portfolio policies are identical to the
+original static baseline; new IDs record only the changed data provenance.
+
+`quote-bars-v2` compares consecutive quotes only inside each half-open bar. It
+uses the canonical physical order for equal timestamps, computes rolling
+imbalances from summed transition counts, and defines inter-arrival dispersion
+as population standard deviation in seconds. `causal-v2` uses fixed 15- and
+60-minute windows and resets every trailing window after a missing five-minute
+bar. These choices must not be changed after observing the 2021 screen.
+
+The official execution path is the resumable 43-stage
+`microstructure-screen-pipeline-v1`. It binds every contract and the runtime
+digest into one run identity, applies `2022-01-01T00:00:00Z` as the bar-data
+cutoff, and requires all eight symbol outputs before evaluating the gates. The
+standalone `evaluate-microstructure-screen` command emits a scientific result
+only and cannot authorize promotion; the final acceptance envelope additionally
+verifies the pipeline run, stage inventory, screen checkpoint and config hashes.
+This pipeline does not authorize a 2022-2024 run or any locked-test access.
+
 ## Frozen Candidate And One-Shot Locked Test
 
 Phase 13 protocol `locked-test-evaluation-v1` is fixed before development
@@ -452,7 +500,8 @@ Phase 5 publication and the full tick audit are complete. Phases 6-13 contracts
 and pipelines are implemented. The Phase 12 full-development run and the
 development-only calibrated follow-up both failed the unchanged acceptance
 criteria; the pre-2022 nonlinear screen also failed. Phase 13 remains inactive,
-and the locked test remains forbidden.
+and the locked test remains forbidden. The next planned research phase is the
+pre-2022 tick-microstructure feature screen described above.
 
 ## License
 

@@ -9,11 +9,17 @@ from datetime import datetime, timedelta
 import pyarrow as pa  # type: ignore[import-untyped]
 
 from demofml.bars.quotes import BAR_TIMESTAMP, validate_quote_bar_schema
+from demofml.bars.quotes_v2 import validate_quote_bar_v2_schema
 
 BAR_INTERVAL_MINUTES = 5
 MAX_QUOTE_LATENCY_MINUTES = 5
 DEFAULT_HORIZONS_MINUTES = (15, 30, 60)
 LABEL_SET_ID = "executable-v1"
+LABEL_SET_V2_ID = "executable-v2"
+_LABEL_SOURCES = {
+    LABEL_SET_ID: ("quote-bars-v1", validate_quote_bar_schema),
+    LABEL_SET_V2_ID: ("quote-bars-v2", validate_quote_bar_v2_schema),
+}
 _REQUIRED_COLUMNS = (
     "symbol",
     "bar_start",
@@ -42,9 +48,15 @@ def _validate_parameters(
 def label_schema(
     horizons_minutes: Sequence[int],
     minimum_return_bps: float = 0.0,
+    *,
+    label_set: str = LABEL_SET_ID,
 ) -> pa.Schema:
     """Build a schema containing every behavior-affecting label parameter."""
     horizons = _validate_parameters(horizons_minutes, minimum_return_bps)
+    try:
+        source_bar_set, _validator = _LABEL_SOURCES[label_set]
+    except KeyError as error:
+        raise ValueError(f"unsupported label set: {label_set}") from error
     fields = [
         pa.field("symbol", pa.string(), nullable=False),
         pa.field("decision_time", BAR_TIMESTAMP, nullable=False),
@@ -65,12 +77,12 @@ def label_schema(
     return pa.schema(
         fields,
         metadata={
-            b"demofml.label_set": LABEL_SET_ID.encode(),
+            b"demofml.label_set": label_set.encode(),
             b"demofml.horizons_minutes": ",".join(
                 str(value) for value in horizons
             ).encode(),
             b"demofml.minimum_return_bps": str(minimum_return_bps).encode(),
-            b"demofml.source_bar_set": b"quote-bars-v1",
+            b"demofml.source_bar_set": source_bar_set.encode(),
             b"demofml.source_bar_interval_minutes": str(
                 BAR_INTERVAL_MINUTES
             ).encode(),
@@ -135,12 +147,22 @@ class ExecutableLabelBuilder:
         self,
         horizons_minutes: Sequence[int] = DEFAULT_HORIZONS_MINUTES,
         minimum_return_bps: float = 0.0,
+        *,
+        label_set: str = LABEL_SET_ID,
     ) -> None:
         self._horizons = _validate_parameters(
             horizons_minutes, minimum_return_bps
         )
         self._minimum_return = minimum_return_bps / 10_000.0
-        self._schema = label_schema(self._horizons, minimum_return_bps)
+        try:
+            _source_bar_set, self._validate_schema = _LABEL_SOURCES[label_set]
+        except KeyError as error:
+            raise ValueError(f"unsupported label set: {label_set}") from error
+        self._schema = label_schema(
+            self._horizons,
+            minimum_return_bps,
+            label_set=label_set,
+        )
         self._pending: deque[_PendingDecision] = deque()
         self._symbol: str | None = None
         self._last_first_tick: datetime | None = None
@@ -235,7 +257,7 @@ class ExecutableLabelBuilder:
 
     def push(self, bars: pa.Table) -> pa.Table:
         """Consume ordered bars and emit decisions whose horizons are resolved."""
-        validate_quote_bar_schema(bars.schema)
+        self._validate_schema(bars.schema)
         rows: list[dict[str, object]] = []
         for bar in bars.select(list(_REQUIRED_COLUMNS)).to_pylist():
             self._validate_bar(bar)
@@ -270,9 +292,15 @@ def generate_executable_labels(
     bars: pa.Table,
     horizons_minutes: Sequence[int] = DEFAULT_HORIZONS_MINUTES,
     minimum_return_bps: float = 0.0,
+    *,
+    label_set: str = LABEL_SET_ID,
 ) -> pa.Table:
     """Generate labels in-memory through the same bounded streaming state."""
-    builder = ExecutableLabelBuilder(horizons_minutes, minimum_return_bps)
+    builder = ExecutableLabelBuilder(
+        horizons_minutes,
+        minimum_return_bps,
+        label_set=label_set,
+    )
     completed = builder.push(bars)
     trailing = builder.finish()
     return pa.concat_tables([completed, trailing])

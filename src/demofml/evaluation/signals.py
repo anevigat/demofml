@@ -10,7 +10,11 @@ from typing import Any
 
 import pyarrow as pa  # type: ignore[import-untyped]
 
-from demofml.models.baseline import PREDICTION_SET_ID, PREDICTION_SET_V3_ID
+from demofml.models.baseline import (
+    PREDICTION_SET_ID,
+    PREDICTION_SET_V3_ID,
+    PREDICTION_SET_V4_ID,
+)
 from demofml.models.locked import LOCKED_PREDICTION_SET_ID
 
 EVALUATION_SET_ID = "executable-signal-metrics-v1"
@@ -72,7 +76,11 @@ def evaluate_predictions(predictions: pa.Table) -> dict[str, Any]:
         raise ValueError(f"prediction schema is missing {sorted(missing)}")
     metadata = predictions.schema.metadata or {}
     prediction_set = metadata.get(b"demofml.prediction_set", b"").decode()
-    if prediction_set not in {PREDICTION_SET_ID, PREDICTION_SET_V3_ID}:
+    if prediction_set not in {
+        PREDICTION_SET_ID,
+        PREDICTION_SET_V3_ID,
+        PREDICTION_SET_V4_ID,
+    }:
         raise ValueError("prediction metadata is not a development prediction set")
     if predictions.num_rows == 0:
         raise ValueError("cannot evaluate empty predictions")

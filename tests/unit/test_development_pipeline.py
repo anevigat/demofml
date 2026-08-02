@@ -32,6 +32,9 @@ from demofml.validation.splits import load_validation_plan
 PROJECT_ROOT = Path(__file__).parents[2]
 PIPELINE_CONFIG = PROJECT_ROOT / "configs/experiments/development-pipeline-v2.toml"
 PIPELINE_V3_CONFIG = PROJECT_ROOT / "configs/experiments/development-pipeline-v3.toml"
+SCREEN_PIPELINE_CONFIG = (
+    PROJECT_ROOT / "configs/experiments/microstructure-screen-pipeline-v1.toml"
+)
 VALIDATION_CONFIG = PROJECT_ROOT / "configs/experiments/purged-walk-forward-v1.toml"
 MODEL_CONFIG = PROJECT_ROOT / "configs/experiments/baseline-ridge-v1.toml"
 
@@ -175,6 +178,17 @@ def test_pipeline_config_binds_all_research_contracts() -> None:
     )
     assert portfolio.model_set == "baseline-ridge-v2"
 
+    screen = load_pipeline_config(SCREEN_PIPELINE_CONFIG)
+    assert screen.id == "microstructure-screen-pipeline-v1"
+    assert screen.bar_config is not None
+    assert screen.bar_config.name == "quote-bars-v2.toml"
+    assert len(screen.referenced_configs) == 8
+    _, screen_portfolio = development_module._validate_contracts(
+        screen,
+        load_development_dataset(screen.dataset_config),
+    )
+    assert screen_portfolio.model_set == "baseline-ridge-v3"
+
 
 def test_published_phase_11_pipeline_config_remains_loadable() -> None:
     config = load_pipeline_config(
@@ -261,6 +275,40 @@ def test_pipeline_lock_rejects_concurrent_attempt(tmp_path: Path) -> None:
         development_module._exclusive_run(tmp_path),
     ):
         pytest.fail("second attempt must not acquire the lock")
+
+
+def test_pipeline_rejects_prematurely_finished_mlflow_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_pipeline_config(SCREEN_PIPELINE_CONFIG)
+    code_reference = "sha256:" + "c" * 64
+    run_id = development_module._run_id(
+        SCREEN_PIPELINE_CONFIG, config, code_reference
+    )
+    root = tmp_path / "work" / config.id / run_id
+    root.mkdir(parents=True)
+    (root / "mlflow-run.json").write_text(
+        json.dumps(
+            {"pipeline_run_id": run_id, "mlflow_run_id": "mlflow-run-1"}
+        )
+    )
+    tracking = _Mlflow()
+    tracking.status = "FINISHED"
+    monkeypatch.setattr(development_module, "load_published_manifest", lambda *a: {})
+
+    with pytest.raises(RuntimeError, match="finished before pipeline logging"):
+        run_development_pipeline(
+            SCREEN_PIPELINE_CONFIG,
+            tmp_path / "work",
+            code_reference,
+            "data",
+            "https://s3.invalid",
+            "us-east-1",
+            "https://mlflow.invalid",
+            s3=object(),
+            mlflow=tracking,
+        )
 
 
 @pytest.mark.parametrize(
@@ -474,3 +522,159 @@ def test_pipeline_runs_all_stages_once_and_then_is_idempotent(
 
     assert rejected["summary"]["accepted"] is False
     assert rejected["summary"]["fail"] > acceptance["summary"]["fail"]
+
+
+def test_microstructure_screen_pipeline_dispatches_v2_and_is_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def write_parquet(path: Path, value: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(pa.table({"value": [value]}), path)
+
+    def bars_builder(*arguments: Any, **keywords: object) -> None:
+        output = arguments[1]
+        assert isinstance(output, Path)
+        write_parquet(output, "bars")
+        calls.append(("bars", keywords))
+
+    def features_builder(*arguments: Any, **keywords: object) -> None:
+        output = arguments[1]
+        assert isinstance(output, Path)
+        write_parquet(output, "features")
+        calls.append(("features", keywords))
+
+    def labels_builder(*arguments: Any, **keywords: object) -> None:
+        output = arguments[1]
+        assert isinstance(output, Path)
+        write_parquet(output, "labels")
+        calls.append(("labels", keywords))
+
+    def isolated(
+        features: Path, labels: Path, plan: object, output: Path
+    ) -> None:
+        output.mkdir(parents=True)
+        write_parquet(output / "features.parquet", "features-development")
+        write_parquet(output / "labels.parquet", "labels-development")
+        calls.append(("slice", {}))
+
+    def baseline(*arguments: Any) -> None:
+        output = arguments[-1]
+        assert isinstance(output, Path)
+        output.mkdir(parents=True)
+        symbol = output.parent.name
+        model = load_baseline_config(arguments[-2])
+        start = datetime(2021, 1, 4, tzinfo=UTC)
+        rows: list[dict[str, object]] = []
+        for sample in range(100):
+            decision = start + timedelta(minutes=5 * sample)
+            for horizon in (15, 30, 60):
+                rows.append(
+                    {
+                        "model_set": model.id,
+                        "validation_set": model.validation_set,
+                        "fold_id": "wf-2021-01",
+                        "symbol": symbol,
+                        "decision_time": decision,
+                        "entry_time": decision + timedelta(seconds=1),
+                        "exit_time": decision
+                        + timedelta(minutes=horizon, seconds=1),
+                        "horizon_minutes": horizon,
+                        "predicted_long_return": 0.0002,
+                        "predicted_short_return": -0.0002,
+                        "action": "long",
+                        "realized_return": 0.0001,
+                    }
+                )
+        table = pa.Table.from_pylist(rows, schema=prediction_schema(model))
+        pq.write_table(table, output / "predictions.parquet")
+        (output / "metrics.json").write_text(
+            json.dumps(evaluate_predictions(table), sort_keys=True)
+        )
+        calls.append(("baseline", {}))
+
+    def portfolio(
+        prediction_paths: list[Path],
+        portfolio_config: Path,
+        validation_config: Path,
+        output: Path,
+    ) -> None:
+        run_actual_portfolio_evaluation(
+            prediction_paths, portfolio_config, validation_config, output
+        )
+        calls.append(("portfolio", {}))
+
+    monkeypatch.setattr(development_module, "load_published_manifest", lambda *a: {})
+    monkeypatch.setattr(
+        development_module, "materialize_development_file", lambda *a: tmp_path
+    )
+    monkeypatch.setattr(
+        development_module, "verify_materialized_inventory", lambda *a, **k: ()
+    )
+    monkeypatch.setattr(development_module, "build_quote_bars", bars_builder)
+    monkeypatch.setattr(development_module, "build_features", features_builder)
+    monkeypatch.setattr(development_module, "build_labels", labels_builder)
+    monkeypatch.setattr(development_module, "isolate_development_rows", isolated)
+    monkeypatch.setattr(development_module, "run_baseline_experiment", baseline)
+    monkeypatch.setattr(development_module, "run_portfolio_evaluation", portfolio)
+    tracking = _Mlflow()
+
+    result = run_development_pipeline(
+        SCREEN_PIPELINE_CONFIG,
+        tmp_path / "work",
+        "sha256:" + "b" * 64,
+        "data",
+        "https://s3.invalid",
+        "us-east-1",
+        "https://mlflow.invalid",
+        s3=object(),
+        mlflow=tracking,
+    )
+    repeated = run_development_pipeline(
+        SCREEN_PIPELINE_CONFIG,
+        tmp_path / "work",
+        "sha256:" + "b" * 64,
+        "data",
+        "https://s3.invalid",
+        "us-east-1",
+        "https://mlflow.invalid",
+        s3=object(),
+        mlflow=tracking,
+    )
+
+    assert result == repeated
+    assert len([name for name, _ in calls if name == "bars"]) == 8
+    assert all(
+        keywords["bar_set"] == "quote-bars-v2"
+        and keywords["end_exclusive"] == datetime(2022, 1, 1, tzinfo=UTC)
+        for name, keywords in calls
+        if name == "bars"
+    )
+    assert all(
+        keywords == {"feature_set": "causal-v2"}
+        for name, keywords in calls
+        if name == "features"
+    )
+    assert all(
+        keywords == {"label_set": "executable-v2"}
+        for name, keywords in calls
+        if name == "labels"
+    )
+    execution = json.loads((result.output / "execution-report.json").read_text())
+    screen = json.loads(
+        (
+            result.output
+            / "acceptance"
+            / "microstructure-screen-acceptance-v1.json"
+        ).read_text()
+    )
+    assert len(execution["stages"]) == 43
+    assert execution["stages"][-1]["stage"] == "screen"
+    assert screen["accepted"] is True
+    assert screen["promotion_authorized"] is True
+    assert screen["report_scope"] == "pipeline_acceptance"
+    assert screen["pipeline_run_id"] == result.run_id
+    assert screen["execution_stage_count"] == 43
+    assert tracking.terminated == [("mlflow-run-1", "FINISHED")]

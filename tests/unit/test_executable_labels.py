@@ -5,10 +5,12 @@ import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import pytest
 
-from demofml.bars.quotes import aggregate_quote_bars
+from demofml.bars.quotes import QUOTE_BAR_SCHEMA, aggregate_quote_bars
+from demofml.bars.quotes_v2 import aggregate_quote_bars_v2
 from demofml.labels.build import build_labels
 from demofml.labels.executable import (
     LABEL_SET_ID,
+    LABEL_SET_V2_ID,
     ExecutableLabelBuilder,
     generate_executable_labels,
 )
@@ -77,6 +79,44 @@ def test_label_build_preserves_version_metadata(tmp_path: Path) -> None:
     assert result.output_rows == 14
     assert metadata is not None
     assert metadata[b"demofml.label_set"] == LABEL_SET_ID.encode()
+
+
+def test_executable_v2_changes_only_provenance() -> None:
+    offsets = list(range(0, 70, 5))
+    bids = [1.0 + index * 0.01 for index in range(14)]
+    v1_bars = _bars(offsets, bids)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    timestamps = [
+        start + timedelta(minutes=offset, seconds=1) for offset in offsets
+    ]
+    asks = [bid + 0.01 for bid in bids]
+    ticks = pa.table(
+        {
+            "timestamp": pa.array(timestamps, type=pa.timestamp("ns", tz="UTC")),
+            "bid": bids,
+            "ask": asks,
+            "mid": [
+                (bid + ask) / 2
+                for bid, ask in zip(bids, asks, strict=True)
+            ],
+            "spread": [
+                ask - bid for bid, ask in zip(bids, asks, strict=True)
+            ],
+        }
+    )
+    v2_bars = aggregate_quote_bars_v2(ticks, "EURUSD")
+
+    v1 = generate_executable_labels(v1_bars)
+    v2 = generate_executable_labels(v2_bars, label_set=LABEL_SET_V2_ID)
+
+    assert v2.replace_schema_metadata(v1.schema.metadata).equals(v1)
+    assert v2.schema.metadata is not None
+    assert v2.schema.metadata[b"demofml.label_set"] == LABEL_SET_V2_ID.encode()
+    with pytest.raises(ValueError, match="quote-bars-v2"):
+        generate_executable_labels(
+            v1_bars.select(QUOTE_BAR_SCHEMA.names),
+            label_set=LABEL_SET_V2_ID,
+        )
 
 
 def test_label_builder_is_partition_invariant() -> None:

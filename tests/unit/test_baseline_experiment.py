@@ -226,6 +226,32 @@ def test_v2_uses_purged_calibration_and_reproducible_actions() -> None:
     with pytest.raises(ValueError, match="action cannot be reproduced"):
         evaluate_predictions(tampered)
 
+    with pytest.raises(ValueError, match="calibrated prediction schema"):
+        evaluate_predictions(predictions.drop(["calibration_slope"]))
+    invalid_metadata = predictions.replace_schema_metadata(
+        {
+            key: value
+            for key, value in (predictions.schema.metadata or {}).items()
+            if key != b"demofml.action_threshold_bps"
+        }
+    )
+    with pytest.raises(ValueError, match="calibrated prediction metadata"):
+        evaluate_predictions(invalid_metadata)
+
+
+def test_prediction_metrics_reject_non_numeric_horizon() -> None:
+    features, labels = _tables()
+    predictions = run_walk_forward(features, labels, _plan(), _config())
+    horizon_index = predictions.schema.get_field_index("horizon_minutes")
+    invalid = predictions.set_column(
+        horizon_index,
+        pa.field("horizon_minutes", pa.string(), nullable=False),
+        pa.array(["invalid"] * predictions.num_rows),
+    )
+
+    with pytest.raises(ValueError, match="horizon_minutes must be numeric"):
+        evaluate_predictions(invalid)
+
 
 def test_v2_validation_outcomes_cannot_change_model_or_calibrator() -> None:
     features, labels = _v2_tables()

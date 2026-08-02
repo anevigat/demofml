@@ -5,12 +5,19 @@ import os
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pyarrow as pa  # type: ignore[import-untyped]
+import pyarrow.compute as pc  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
 from demofml.bars.quotes import QUOTE_BAR_SCHEMA, QuoteBarBuilder
+from demofml.bars.quotes_v2 import (
+    QUOTE_BAR_V2_SCHEMA,
+    QUOTE_BAR_V2_SET_ID,
+    QuoteBarV2Builder,
+)
 from demofml.data.progress import ProgressBar
 
 _BAR_ROW_GROUP_ROWS = 10_000
@@ -25,12 +32,36 @@ class BarBuildResult:
     output_bars: int
 
 
+def _row_group_is_after_cutoff(
+    parquet: pq.ParquetFile,
+    row_group_index: int,
+    end_exclusive: datetime,
+) -> bool:
+    timestamp_index = parquet.schema_arrow.get_field_index("timestamp")
+    if timestamp_index < 0:
+        return False
+    statistics = parquet.metadata.row_group(row_group_index).column(
+        timestamp_index
+    ).statistics
+    if statistics is None or not statistics.has_min_max:
+        return False
+    minimum = statistics.min
+    if not isinstance(minimum, datetime):
+        return False
+    if minimum.tzinfo is None:
+        minimum = minimum.replace(tzinfo=UTC)
+    return minimum.astimezone(UTC) >= end_exclusive
+
+
 def build_quote_bars(
     source: Path,
     output: Path,
     symbol: str,
     interval_minutes: int = 5,
     max_row_groups_per_file: int | None = None,
+    *,
+    bar_set: str = "quote-bars-v1",
+    end_exclusive: datetime | None = None,
 ) -> BarBuildResult:
     """Stream ordered Parquet files into one atomic quote-bar dataset."""
     source = source.expanduser().resolve()
@@ -43,6 +74,19 @@ def build_quote_bars(
         raise RuntimeError(f"No Parquet files found below: {source}")
     if output.exists():
         raise RuntimeError(f"Refusing to replace existing bar dataset: {output}")
+    builder: QuoteBarBuilder | QuoteBarV2Builder
+    if bar_set == "quote-bars-v1":
+        builder = QuoteBarBuilder(symbol, interval_minutes)
+        schema = QUOTE_BAR_SCHEMA
+    elif bar_set == QUOTE_BAR_V2_SET_ID:
+        builder = QuoteBarV2Builder(symbol, interval_minutes)
+        schema = QUOTE_BAR_V2_SCHEMA
+    else:
+        raise ValueError(f"unsupported bar set: {bar_set}")
+    if end_exclusive is not None and (
+        end_exclusive.tzinfo is None or end_exclusive.utcoffset() != timedelta(0)
+    ):
+        raise ValueError("end_exclusive must be timezone-aware UTC")
 
     row_group_limits: list[int] = []
     for path in paths:
@@ -54,7 +98,6 @@ def build_quote_bars(
         )
     total_row_groups = sum(row_group_limits)
     progress = ProgressBar("bars", total_row_groups)
-    builder = QuoteBarBuilder(symbol, interval_minutes)
     input_rows = 0
     output_rows = 0
     completed_row_groups = 0
@@ -64,7 +107,7 @@ def build_quote_bars(
     partial = output.with_name(f".{output.name}.{uuid.uuid4().hex}.partial")
     writer = pq.ParquetWriter(
         partial,
-        QUOTE_BAR_SCHEMA,
+        schema,
         compression="zstd",
         use_dictionary=True,
         write_statistics=True,
@@ -73,7 +116,23 @@ def build_quote_bars(
         for path, row_group_limit in zip(paths, row_group_limits, strict=True):
             parquet = pq.ParquetFile(path)
             for index in range(row_group_limit):
+                if end_exclusive is not None and _row_group_is_after_cutoff(
+                    parquet, index, end_exclusive
+                ):
+                    completed_row_groups += 1
+                    progress.update(completed_row_groups)
+                    continue
                 ticks = parquet.read_row_group(index)
+                if end_exclusive is not None:
+                    ticks = ticks.filter(
+                        pc.less(
+                            ticks.column("timestamp"),
+                            pa.scalar(
+                                end_exclusive,
+                                type=pa.timestamp("ns", tz="UTC"),
+                            ),
+                        )
+                    )
                 input_rows += ticks.num_rows
                 bars = builder.push(ticks)
                 if bars.num_rows:
@@ -121,6 +180,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbol", required=True)
     parser.add_argument("--interval-minutes", type=int, default=5)
     parser.add_argument(
+        "--bar-set",
+        choices=("quote-bars-v1", QUOTE_BAR_V2_SET_ID),
+        default="quote-bars-v1",
+    )
+    parser.add_argument(
+        "--end-exclusive",
+        help="Optional UTC cutoff; ticks at or after it are not aggregated.",
+    )
+    parser.add_argument(
         "--max-row-groups-per-file",
         type=int,
         default=0,
@@ -138,6 +206,20 @@ def main(argv: Sequence[str] | None = None) -> None:
     if arguments.max_row_groups_per_file < 0:
         parser.error("--max-row-groups-per-file cannot be negative")
     limit = arguments.max_row_groups_per_file or None
+    end_exclusive: datetime | None = None
+    if arguments.end_exclusive:
+        try:
+            end_exclusive = datetime.fromisoformat(
+                arguments.end_exclusive.replace("Z", "+00:00")
+            )
+            if (
+                end_exclusive.tzinfo is None
+                or end_exclusive.utcoffset() != timedelta(0)
+            ):
+                raise ValueError
+            end_exclusive = end_exclusive.astimezone(UTC)
+        except ValueError:
+            parser.error("--end-exclusive must be an ISO-8601 UTC timestamp")
     try:
         result = build_quote_bars(
             arguments.source,
@@ -145,6 +227,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             arguments.symbol,
             arguments.interval_minutes,
             limit,
+            bar_set=arguments.bar_set,
+            end_exclusive=end_exclusive,
         )
         print(
             f"built {result.output_bars} bars from {result.input_rows} ticks "

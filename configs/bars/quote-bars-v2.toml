@@ -1,0 +1,21 @@
+id = "quote-bars-v2"
+source = "cleaned-ticks-development-v1"
+interval_minutes = 5
+interval_semantics = "half_open_utc"
+transition_scope = "within_half_open_bar"
+equal_timestamp_order = "canonical_physical_order"
+zero_denominator_policy = "zero"
+interarrival_dispersion = "population_std_seconds"
+
+aggregates = [
+  "bid_update_count",
+  "ask_update_count",
+  "bid_ask_update_imbalance",
+  "mid_uptick_count",
+  "mid_downtick_count",
+  "mid_tick_imbalance",
+  "spread_widening_count",
+  "spread_narrowing_count",
+  "spread_change_imbalance",
+  "interarrival_dispersion_seconds",
+]

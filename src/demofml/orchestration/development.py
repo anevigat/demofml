@@ -17,6 +17,7 @@ import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -38,11 +39,16 @@ from demofml.data.remote import (
 from demofml.evaluation.portfolio import load_portfolio_config
 from demofml.features.build import build_features
 from demofml.features.causal import FEATURE_SCHEMA, FEATURE_SET_ID
+from demofml.features.causal_v2 import (
+    FEATURE_SET_V2_ID,
+    FEATURE_V2_SCHEMA,
+)
 from demofml.labels.build import build_labels
 from demofml.labels.executable import (
     BAR_INTERVAL_MINUTES,
     DEFAULT_HORIZONS_MINUTES,
     LABEL_SET_ID,
+    LABEL_SET_V2_ID,
     MAX_QUOTE_LATENCY_MINUTES,
 )
 from demofml.models.baseline import load_baseline_config
@@ -52,14 +58,25 @@ from demofml.reporting.acceptance import (
     publish_acceptance_report,
 )
 from demofml.reporting.portfolio import run_portfolio_evaluation
+from demofml.reporting.screen import (
+    load_screen_acceptance_config,
+    publish_microstructure_screen,
+    publish_screen_acceptance,
+)
 from demofml.validation.build import build_validation_manifest
 from demofml.validation.development import isolate_development_rows
 from demofml.validation.splits import load_validation_plan
 
 PIPELINE_SET_ID = "development-pipeline-v2"
 PIPELINE_SET_V3_ID = "development-pipeline-v3"
+SCREEN_PIPELINE_SET_ID = "microstructure-screen-pipeline-v1"
 _SUPPORTED_PIPELINE_SETS = frozenset(
-    {"development-pipeline-v1", PIPELINE_SET_ID, PIPELINE_SET_V3_ID}
+    {
+        "development-pipeline-v1",
+        PIPELINE_SET_ID,
+        PIPELINE_SET_V3_ID,
+        SCREEN_PIPELINE_SET_ID,
+    }
 )
 _CODE_REFERENCE_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _HASH_BLOCK_SIZE = 8 * 1024 * 1024
@@ -71,6 +88,7 @@ class PipelineConfig:
 
     id: str
     dataset_config: Path
+    bar_config: Path | None
     feature_config: Path
     label_config: Path
     validation_config: Path
@@ -87,6 +105,7 @@ class PipelineConfig:
         """Return every file that contributes to the run identity."""
         configs = (
             self.dataset_config,
+            *((self.bar_config,) if self.bar_config is not None else ()),
             self.feature_config,
             self.label_config,
             self.validation_config,
@@ -154,6 +173,11 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
             dataset_config=_config_path(
                 path.parent, values["dataset_config"], "dataset_config"
             ),
+            bar_config=(
+                _config_path(path.parent, values["bar_config"], "bar_config")
+                if values.get("bar_config") is not None
+                else None
+            ),
             feature_config=_config_path(
                 path.parent, values["feature_config"], "feature_config"
             ),
@@ -180,12 +204,16 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
     if config.id not in _SUPPORTED_PIPELINE_SETS:
         raise ValueError("pipeline id is not supported")
     if (
-        config.id in {PIPELINE_SET_ID, PIPELINE_SET_V3_ID}
+        config.id in {PIPELINE_SET_ID, PIPELINE_SET_V3_ID, SCREEN_PIPELINE_SET_ID}
         and config.acceptance_config is None
     ):
         raise ValueError(f"{config.id} requires an acceptance config")
     if config.id == "development-pipeline-v1" and config.acceptance_config is not None:
         raise ValueError("development-pipeline-v1 cannot define acceptance")
+    if config.id == SCREEN_PIPELINE_SET_ID and config.bar_config is None:
+        raise ValueError(f"{SCREEN_PIPELINE_SET_ID} requires a bar config")
+    if config.id != SCREEN_PIPELINE_SET_ID and config.bar_config is not None:
+        raise ValueError("published development pipelines cannot define bar_config")
     if not config.symbols or tuple(sorted(set(config.symbols))) != config.symbols:
         raise ValueError("pipeline symbols must be unique and ordered")
     if not config.mlflow_experiment:
@@ -208,23 +236,32 @@ def _validate_contracts(
     plan = load_validation_plan(config.validation_config)
     model = load_baseline_config(config.model_config)
     portfolio = load_portfolio_config(config.portfolio_config)
-    acceptance = (
-        load_acceptance_config(config.acceptance_config)
-        if config.acceptance_config is not None
-        else None
-    )
+    is_screen = config.id == SCREEN_PIPELINE_SET_ID
+    acceptance: Any | None = None
+    if config.acceptance_config is not None:
+        acceptance = (
+            load_screen_acceptance_config(config.acceptance_config)
+            if is_screen
+            else load_acceptance_config(config.acceptance_config)
+        )
+    bars = _load_toml(config.bar_config) if config.bar_config is not None else None
     features = _load_toml(config.feature_config)
     labels = _load_toml(config.label_config)
     if dataset.symbols != config.symbols or portfolio.symbols != config.symbols:
         raise ValueError("pipeline, dataset, and portfolio symbols differ")
-    if acceptance is not None and (
-        acceptance.pipeline_set != config.id
-        or acceptance.symbols != config.symbols
-        or acceptance.horizons_minutes != portfolio.horizons_minutes
-        or acceptance.model_set != model.id
-        or acceptance.portfolio_set != portfolio.id
-    ):
-        raise ValueError("pipeline acceptance contract is incompatible")
+    if acceptance is not None:
+        acceptance_mismatch = (
+            acceptance.pipeline_set != config.id
+            or acceptance.symbols != config.symbols
+            or acceptance.horizons_minutes != portfolio.horizons_minutes
+            or acceptance.model_set != model.id
+        )
+        if not is_screen:
+            acceptance_mismatch = (
+                acceptance_mismatch or acceptance.portfolio_set != portfolio.id
+            )
+        if acceptance_mismatch:
+            raise ValueError("pipeline acceptance contract is incompatible")
     if (
         portfolio.model_set != model.id
         or portfolio.prediction_set != model.prediction_set
@@ -235,22 +272,58 @@ def _validate_contracts(
         or dataset.end_exclusive != plan.locked_test_start
     ):
         raise ValueError("development dataset does not match validation boundaries")
-    expected_features = {
-        "id": FEATURE_SET_ID,
-        "source": "quote-bars-v1",
+    if is_screen:
+        expected_bars = {
+            "id": "quote-bars-v2",
+            "source": "cleaned-ticks-development-v1",
+            "interval_minutes": 5,
+            "interval_semantics": "half_open_utc",
+            "transition_scope": "within_half_open_bar",
+            "equal_timestamp_order": "canonical_physical_order",
+            "zero_denominator_policy": "zero",
+            "interarrival_dispersion": "population_std_seconds",
+            "aggregates": [
+                "bid_update_count",
+                "ask_update_count",
+                "bid_ask_update_imbalance",
+                "mid_uptick_count",
+                "mid_downtick_count",
+                "mid_tick_imbalance",
+                "spread_widening_count",
+                "spread_narrowing_count",
+                "spread_change_imbalance",
+                "interarrival_dispersion_seconds",
+            ],
+        }
+        if bars != expected_bars:
+            raise ValueError("pipeline bar config is incompatible")
+    expected_features: dict[str, Any] = {
+        "id": FEATURE_SET_V2_ID if is_screen else FEATURE_SET_ID,
+        "source": "quote-bars-v2" if is_screen else "quote-bars-v1",
         "decision_time": "bar_end",
         "bar_interval_minutes": BAR_INTERVAL_MINUTES,
         "return_lags_bars": [1, 3, 12],
         "realized_volatility_windows_bars": [12, 72],
         "spread_zscore_window_bars": 72,
+        **(
+            {
+                "microstructure_windows_minutes": [15, 60],
+                "imbalance_aggregation": "ratio_of_rolling_count_sums",
+                "interarrival_aggregation": "mean_of_intrabar_population_std",
+            }
+            if is_screen
+            else {}
+        ),
         "gap_policy": "reset_trailing_state",
-        "features": FEATURE_SCHEMA.names[2:],
+        "features": (
+            FEATURE_V2_SCHEMA.names[2:] if is_screen else FEATURE_SCHEMA.names[2:]
+        ),
     }
     if features != expected_features:
         raise ValueError("pipeline feature config is incompatible")
     expected_labels = {
-        "id": LABEL_SET_ID,
-        "source": "quote-bars-v1",
+        "id": LABEL_SET_V2_ID if is_screen else LABEL_SET_ID,
+        "source": "quote-bars-v2" if is_screen else "quote-bars-v1",
         "decision_time": "bar_end",
         "entry": "first_quote_at_or_after_decision",
         "exit": "first_quote_at_or_after_horizon",
@@ -291,7 +364,10 @@ def _file_sha256(path: Path) -> str:
 def _run_id(config_path: Path, config: PipelineConfig, code_reference: str) -> str:
     if not _CODE_REFERENCE_PATTERN.fullmatch(code_reference):
         raise ValueError("code reference must be an immutable sha256 image digest")
-    roles = ["dataset", "features", "labels", "validation", "model", "portfolio"]
+    roles = ["dataset"]
+    if config.bar_config is not None:
+        roles.append("bars")
+    roles.extend(["features", "labels", "validation", "model", "portfolio"])
     if config.acceptance_config is not None:
         roles.append("acceptance")
     identity = {
@@ -508,7 +584,16 @@ def _create_tracking_run(
     tracked = client.create_run(
         experiment_id,
         tags={
-            "component": "phase-12",
+            "component": (
+                "microstructure-screen"
+                if config.id == SCREEN_PIPELINE_SET_ID
+                else "phase-12"
+            ),
+            "research_stage": (
+                "pre-2022-microstructure-screen"
+                if config.id == SCREEN_PIPELINE_SET_ID
+                else "phase-12-development"
+            ),
             "pipeline_set": config.id,
             "pipeline_run_id": run_id,
             "development_only": "true",
@@ -634,13 +719,29 @@ def _log_metrics(
     )
     if acceptance_path is not None and acceptance_path.is_file():
         acceptance = _read_json_object(acceptance_path, "Acceptance report")
-        summary = acceptance["summary"]
-        client.log_metric(
-            mlflow_run_id, "development_accepted", float(bool(summary["accepted"]))
-        )
-        client.log_metric(
-            mlflow_run_id, "development_failed_checks", float(summary["fail"])
-        )
+        if "summary" in acceptance:
+            summary = acceptance["summary"]
+            client.log_metric(
+                mlflow_run_id,
+                "development_accepted",
+                float(bool(summary["accepted"])),
+            )
+            client.log_metric(
+                mlflow_run_id, "development_failed_checks", float(summary["fail"])
+            )
+        else:
+            gates = acceptance["gates"]
+            failed_gates = sum(not bool(value) for value in gates.values())
+            client.log_metric(
+                mlflow_run_id,
+                "microstructure_screen_accepted",
+                float(bool(acceptance["accepted"])),
+            )
+            client.log_metric(
+                mlflow_run_id,
+                "microstructure_screen_failed_gates",
+                float(failed_gates),
+            )
 
 
 def _build_symbol_bars(
@@ -651,12 +752,50 @@ def _build_symbol_bars(
     inputs: Path,
     output: Path,
     symbol: str,
+    bar_set: str,
+    end_exclusive: datetime | None,
 ) -> object:
     for entry in entries:
         materialize_development_file(client, bucket, dataset, entry, inputs)
     source = inputs / symbol
     verify_materialized_inventory(source, entries, path_prefix=symbol)
-    return build_quote_bars(source, output, symbol, BAR_INTERVAL_MINUTES)
+    if bar_set == "quote-bars-v1":
+        return build_quote_bars(source, output, symbol, BAR_INTERVAL_MINUTES)
+    return build_quote_bars(
+        source,
+        output,
+        symbol,
+        BAR_INTERVAL_MINUTES,
+        bar_set=bar_set,
+        end_exclusive=end_exclusive,
+    )
+
+
+def _build_symbol_features(
+    bars: Path,
+    output: Path,
+    symbol: str,
+    feature_set: str,
+) -> object:
+    if feature_set == FEATURE_SET_ID:
+        return build_features(bars, output, symbol)
+    return build_features(bars, output, symbol, feature_set=feature_set)
+
+
+def _build_symbol_labels(
+    bars: Path,
+    output: Path,
+    label_set: str,
+) -> object:
+    if label_set == LABEL_SET_ID:
+        return build_labels(bars, output, DEFAULT_HORIZONS_MINUTES, 0.0)
+    return build_labels(
+        bars,
+        output,
+        DEFAULT_HORIZONS_MINUTES,
+        0.0,
+        label_set=label_set,
+    )
 
 
 def _run_development_pipeline(
@@ -676,11 +815,18 @@ def _run_development_pipeline(
     config = load_pipeline_config(pipeline_config_path)
     dataset = load_development_dataset(config.dataset_config)
     plan, _ = _validate_contracts(config, dataset)
-    acceptance_config = (
-        load_acceptance_config(config.acceptance_config)
-        if config.acceptance_config is not None
-        else None
-    )
+    is_screen = config.id == SCREEN_PIPELINE_SET_ID
+    acceptance_config: Any | None = None
+    if config.acceptance_config is not None:
+        acceptance_config = (
+            load_screen_acceptance_config(config.acceptance_config)
+            if is_screen
+            else load_acceptance_config(config.acceptance_config)
+        )
+    bar_set = "quote-bars-v2" if is_screen else "quote-bars-v1"
+    feature_set = FEATURE_SET_V2_ID if is_screen else FEATURE_SET_ID
+    label_set = LABEL_SET_V2_ID if is_screen else LABEL_SET_ID
+    data_end_exclusive = plan.development_end_exclusive if is_screen else None
     run_id = _run_id(pipeline_config_path, config, code_reference)
     root = workdir.expanduser().resolve() / config.id / run_id
     acceptance_path = (
@@ -688,6 +834,7 @@ def _run_development_pipeline(
         if acceptance_config is not None
         else None
     )
+    screen_result_path = root / "screen" / "result.json" if is_screen else None
     success = root / "_SUCCESS"
     success_record: dict[str, Any] | None = None
     if success.exists() and not success.is_file():
@@ -709,11 +856,29 @@ def _run_development_pipeline(
         run_id,
         root / "mlflow-run.json",
     )
+    tracking_complete_path = root / "mlflow-complete.json"
+    tracking_complete: dict[str, Any] | None = None
+    if tracking_complete_path.exists():
+        tracking_complete = _read_json_object(
+            tracking_complete_path, "MLflow completion marker"
+        )
+        if (
+            tracking_complete.get("pipeline_run_id") != run_id
+            or tracking_complete.get("mlflow_run_id") != mlflow_run_id
+        ):
+            raise RuntimeError("MLflow completion marker identity differs")
     if success_record is not None and (
         success_record.get("mlflow_run_id") != mlflow_run_id
         or tracking_status != "FINISHED"
+        or tracking_complete is None
     ):
         raise RuntimeError("Pipeline success and MLflow state differ")
+    if (
+        success_record is None
+        and tracking_status == "FINISHED"
+        and tracking_complete is None
+    ):
+        raise RuntimeError("MLflow run finished before pipeline logging completed")
     compute_started = 0
     executions: list[StageExecution] = []
     try:
@@ -761,6 +926,8 @@ def _run_development_pipeline(
                     root / "inputs",
                     bars,
                     symbol,
+                    bar_set,
+                    data_end_exclusive,
                 ),
                 stage="bars",
                 symbol=symbol,
@@ -772,7 +939,13 @@ def _run_development_pipeline(
                 symbol_root / "features.stage.json",
                 _stage_fingerprint(run_id, "features", symbol),
                 [features],
-                partial(build_features, bars, features, symbol),
+                partial(
+                    _build_symbol_features,
+                    bars,
+                    features,
+                    symbol,
+                    feature_set,
+                ),
                 stage="features",
                 symbol=symbol,
                 executions=executions,
@@ -784,8 +957,10 @@ def _run_development_pipeline(
                 _stage_fingerprint(run_id, "labels", symbol),
                 [labels],
                 partial(
-                    build_labels,
-                    bars, labels, DEFAULT_HORIZONS_MINUTES, 0.0
+                    _build_symbol_labels,
+                    bars,
+                    labels,
+                    label_set,
                 ),
                 stage="labels",
                 symbol=symbol,
@@ -848,6 +1023,28 @@ def _run_development_pipeline(
             stage="portfolio",
             executions=executions,
         )
+        if is_screen:
+            if (
+                config.acceptance_config is None
+                or acceptance_path is None
+                or screen_result_path is None
+            ):
+                raise RuntimeError("microstructure screen paths are missing")
+            screen_acceptance_config = config.acceptance_config
+            _run_stage(
+                root,
+                root / "screen.stage.json",
+                _stage_fingerprint(run_id, "screen"),
+                [screen_result_path],
+                lambda: publish_microstructure_screen(
+                    prediction_paths,
+                    screen_acceptance_config,
+                    config.validation_config,
+                    screen_result_path,
+                ),
+                stage="screen",
+                executions=executions,
+            )
         run_record = {
             "format_version": 1,
             "pipeline_set": config.id,
@@ -861,6 +1058,13 @@ def _run_development_pipeline(
             "development_only": True,
             "locked_test_start": plan.locked_test_start.isoformat(),
         }
+        if is_screen:
+            run_record["research_data_end_exclusive"] = (
+                plan.development_end_exclusive.isoformat()
+            )
+            run_record["research_decision_end_exclusive"] = (
+                plan.development_decision_end.isoformat()
+            )
         if acceptance_config is not None:
             run_record["acceptance_set"] = acceptance_config.id
         run_record_path = root / "run.json"
@@ -871,6 +1075,11 @@ def _run_development_pipeline(
         else:
             _write_json_no_replace(run_record_path, run_record)
         execution_report_path = root / "execution-report.json"
+        if (
+            acceptance_config is not None
+            and len(executions) != acceptance_config.expected_stage_count
+        ):
+            raise RuntimeError("Pipeline stage count differs from acceptance contract")
         if execution_report_path.exists():
             execution_report = _read_json_object(
                 execution_report_path, "Execution report"
@@ -891,14 +1100,35 @@ def _run_development_pipeline(
                     "format_version": 1,
                     "pipeline_run_id": run_id,
                     "status": "COMPUTE_SUCCEEDED",
-                    "report_scope": "computational_stages_through_portfolio",
+                    "report_scope": (
+                        "computational_stages_through_microstructure_screen"
+                        if is_screen
+                        else "computational_stages_through_portfolio"
+                    ),
                     "attempt_mode": attempt_mode,
                     "compute_elapsed_ns": time.perf_counter_ns() - compute_started,
                     "process_lifetime_peak_rss_bytes_at_end": _peak_rss_bytes(),
                     "stages": [asdict(execution) for execution in executions],
                 },
             )
-        if config.acceptance_config is not None and acceptance_path is not None:
+        if (
+            is_screen
+            and config.acceptance_config is not None
+            and acceptance_path is not None
+            and screen_result_path is not None
+        ):
+            publish_screen_acceptance(
+                root,
+                pipeline_config_path,
+                config.acceptance_config,
+                screen_result_path,
+                acceptance_path,
+            )
+        if (
+            not is_screen
+            and config.acceptance_config is not None
+            and acceptance_path is not None
+        ):
             acceptance_report = publish_acceptance_report(
                 root,
                 config.acceptance_config,
@@ -911,11 +1141,33 @@ def _run_development_pipeline(
                 f"fail={summary['fail']} blocked={summary['blocked']}",
                 flush=True,
             )
-        if tracking_status == "RUNNING":
-            _log_metrics(mlflow, mlflow_run_id, root, acceptance_path)
-            _log_artifacts(
-                mlflow, mlflow_run_id, root, config.symbols, acceptance_path
+        elif is_screen and acceptance_path is not None:
+            screen_report = _read_json_object(
+                acceptance_path, "Microstructure screen report"
             )
+            print(
+                "microstructure screen: "
+                f"accepted={screen_report['accepted']} "
+                f"gates={screen_report['gates']}",
+                flush=True,
+            )
+        if tracking_status == "RUNNING":
+            if tracking_complete is None:
+                _log_metrics(mlflow, mlflow_run_id, root, acceptance_path)
+                _log_artifacts(
+                    mlflow, mlflow_run_id, root, config.symbols, acceptance_path
+                )
+                _write_json_no_replace(
+                    tracking_complete_path,
+                    {
+                        "format_version": 1,
+                        "pipeline_run_id": run_id,
+                        "mlflow_run_id": mlflow_run_id,
+                    },
+                )
+                tracking_complete = _read_json_object(
+                    tracking_complete_path, "MLflow completion marker"
+                )
             mlflow.set_terminated(mlflow_run_id, status="FINISHED")
         elif tracking_status != "FINISHED":
             raise RuntimeError(f"MLflow run cannot be resumed from {tracking_status}")

@@ -1,0 +1,14 @@
+format_version = 1
+id = "microstructure-screen-pipeline-v1"
+dataset_config = "../datasets/cleaned-ticks-development-v1.toml"
+bar_config = "../bars/quote-bars-v2.toml"
+feature_config = "../features/causal-v2.toml"
+label_config = "executable-labels-v2.toml"
+validation_config = "causal-v2-screen-2021-v1.toml"
+model_config = "baseline-ridge-v3.toml"
+portfolio_config = "portfolio-v3.toml"
+acceptance_config = "microstructure-screen-acceptance-v1.toml"
+symbols = ["AUDUSD", "EURCHF", "EURJPY", "EURUSD", "GBPJPY", "GBPUSD", "USDCAD", "USDJPY"]
+mlflow_experiment = "demofml-microstructure-screen"
+locked_test_policy = "forbidden"
+resume_policy = "verified_stage_fingerprint"

@@ -10,7 +10,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from demofml.validation.splits import ValidationPlan, load_validation_plan
+from demofml.validation.splits import (
+    SCREEN_VALIDATION_SET_ID,
+    ValidationPlan,
+    load_validation_plan,
+)
 
 
 @dataclass(frozen=True)
@@ -28,7 +32,7 @@ def _timestamp(value: datetime) -> str:
 def validation_manifest(plan: ValidationPlan) -> dict[str, Any]:
     """Render a stable JSON-serializable validation manifest."""
     folds = plan.folds()
-    return {
+    manifest = {
         "format_version": 1,
         "id": plan.id,
         "strategy": plan.strategy,
@@ -55,6 +59,12 @@ def validation_manifest(plan: ValidationPlan) -> dict[str, Any]:
             for fold in folds
         ],
     }
+    if plan.id == SCREEN_VALIDATION_SET_ID:
+        manifest["research_cutoff"] = {
+            "data_end_exclusive": _timestamp(plan.development_end_exclusive),
+            "decision_end_exclusive": _timestamp(plan.development_decision_end),
+        }
+    return manifest
 
 
 def build_validation_manifest(config: Path, output: Path) -> ValidationBuildResult:

@@ -5,21 +5,26 @@ from demofml.evaluation.portfolio import (
     PORTFOLIO_HORIZONS,
     PORTFOLIO_SET_ID,
     PORTFOLIO_SET_V2_ID,
+    PORTFOLIO_SET_V3_ID,
     PORTFOLIO_SYMBOLS,
     load_portfolio_config,
 )
 from demofml.features.causal import FEATURE_SET_ID
+from demofml.features.causal_v2 import FEATURE_SET_V2_ID, FEATURE_V2_COLUMNS
 from demofml.labels.executable import (
     BAR_INTERVAL_MINUTES,
     DEFAULT_HORIZONS_MINUTES,
     LABEL_SET_ID,
+    LABEL_SET_V2_ID,
     MAX_QUOTE_LATENCY_MINUTES,
 )
 from demofml.models.baseline import (
     FEATURE_COLUMNS,
     MODEL_SET_ID,
     MODEL_SET_V2_ID,
+    MODEL_SET_V3_ID,
     PREDICTION_SET_V3_ID,
+    PREDICTION_SET_V4_ID,
     load_baseline_config,
 )
 from demofml.orchestration.locked import (
@@ -34,6 +39,7 @@ from demofml.reporting.acceptance import (
 )
 from demofml.validation.splits import (
     INTERVAL_SEMANTICS,
+    SCREEN_VALIDATION_SET_ID,
     VALIDATION_SET_ID,
     VALIDATION_STRATEGY,
     load_validation_plan,
@@ -51,6 +57,12 @@ def test_feature_config_matches_implementation() -> None:
     assert config["bar_interval_minutes"] == BAR_INTERVAL_MINUTES
     assert config["gap_policy"] == "reset_trailing_state"
 
+    with (PROJECT_ROOT / "configs/features/causal-v2.toml").open("rb") as source:
+        v2 = tomllib.load(source)
+    assert v2["id"] == FEATURE_SET_V2_ID
+    assert tuple(v2["features"]) == FEATURE_V2_COLUMNS
+    assert v2["microstructure_windows_minutes"] == [15, 60]
+
 
 def test_label_config_matches_implementation() -> None:
     path = PROJECT_ROOT / "configs/experiments/executable-labels-v1.toml"
@@ -63,6 +75,14 @@ def test_label_config_matches_implementation() -> None:
     assert config["max_entry_latency_minutes"] == MAX_QUOTE_LATENCY_MINUTES
     assert config["max_exit_latency_minutes"] == MAX_QUOTE_LATENCY_MINUTES
     assert config["returns"]["short"] == "1 - exit_ask / entry_bid"
+
+    with (
+        PROJECT_ROOT / "configs/experiments/executable-labels-v2.toml"
+    ).open("rb") as source:
+        v2 = tomllib.load(source)
+    assert v2["id"] == LABEL_SET_V2_ID
+    assert v2["source"] == "quote-bars-v2"
+    assert v2["returns"] == config["returns"]
 
 
 def test_validation_config_matches_implementation() -> None:
@@ -77,6 +97,14 @@ def test_validation_config_matches_implementation() -> None:
     assert plan.purge_minutes == (
         max(DEFAULT_HORIZONS_MINUTES) + MAX_QUOTE_LATENCY_MINUTES
     )
+
+    screen = load_validation_plan(
+        PROJECT_ROOT / "configs/experiments/causal-v2-screen-2021-v1.toml"
+    )
+    assert screen.id == SCREEN_VALIDATION_SET_ID
+    assert len(screen.folds()) == 1
+    assert screen.folds()[0].id == "wf-2021-01"
+    assert screen.development_end_exclusive.year == 2022
 
 
 def test_baseline_config_matches_implementation() -> None:
@@ -99,6 +127,15 @@ def test_baseline_config_matches_implementation() -> None:
     assert calibrated.calibration_window_months == 1
     assert calibrated.calibration_purge_minutes == 65
 
+    microstructure = load_baseline_config(
+        PROJECT_ROOT / "configs/experiments/baseline-ridge-v3.toml"
+    )
+    assert microstructure.id == MODEL_SET_V3_ID
+    assert microstructure.prediction_set == PREDICTION_SET_V4_ID
+    assert microstructure.features == FEATURE_V2_COLUMNS
+    assert microstructure.alpha == config.alpha
+    assert microstructure.selection_policy == config.selection_policy
+
 
 def test_portfolio_config_matches_implementation() -> None:
     path = PROJECT_ROOT / "configs/experiments/portfolio-v1.toml"
@@ -118,6 +155,14 @@ def test_portfolio_config_matches_implementation() -> None:
     assert calibrated.prediction_set == PREDICTION_SET_V3_ID
     assert calibrated.initial_capital_usd == config.initial_capital_usd
     assert calibrated.maximum_drawdown == config.maximum_drawdown
+
+    microstructure = load_portfolio_config(
+        PROJECT_ROOT / "configs/experiments/portfolio-v3.toml"
+    )
+    assert microstructure.id == PORTFOLIO_SET_V3_ID
+    assert microstructure.prediction_set == PREDICTION_SET_V4_ID
+    assert microstructure.validation_set == SCREEN_VALIDATION_SET_ID
+    assert microstructure.initial_capital_usd == config.initial_capital_usd
 
 
 def test_development_acceptance_is_frozen_before_execution() -> None:

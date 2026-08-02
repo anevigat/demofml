@@ -28,6 +28,11 @@ def main(argv: Sequence[str] | None = None) -> None:
 
         run_development(values[1:])
         return
+    if values and values[0] == "evaluate-microstructure-screen":
+        from demofml.reporting.screen import main as evaluate_screen
+
+        evaluate_screen(values[1:])
+        return
 
     parser = argparse.ArgumentParser(prog="demofml")
     parser.add_argument(
@@ -36,6 +41,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         choices=[
             "evaluate-development",
             "evaluate-locked-test",
+            "evaluate-microstructure-screen",
             "freeze-candidate",
             "run-development",
             "smoke-infra",

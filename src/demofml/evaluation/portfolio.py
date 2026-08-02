@@ -18,16 +18,28 @@ from demofml.labels.executable import MAX_QUOTE_LATENCY_MINUTES
 from demofml.models.baseline import (
     MODEL_SET_ID,
     MODEL_SET_V2_ID,
+    MODEL_SET_V3_ID,
     PREDICTION_SET_ID,
     PREDICTION_SET_V3_ID,
+    PREDICTION_SET_V4_ID,
 )
-from demofml.validation.splits import VALIDATION_SET_ID
+from demofml.validation.splits import SCREEN_VALIDATION_SET_ID, VALIDATION_SET_ID
 
 PORTFOLIO_SET_ID = "normalized-sleeve-portfolio-v1"
 PORTFOLIO_SET_V2_ID = "normalized-sleeve-portfolio-v2"
+PORTFOLIO_SET_V3_ID = "normalized-sleeve-portfolio-v3"
 _PORTFOLIO_PROVENANCE = {
-    PORTFOLIO_SET_ID: (PREDICTION_SET_ID, MODEL_SET_ID),
-    PORTFOLIO_SET_V2_ID: (PREDICTION_SET_V3_ID, MODEL_SET_V2_ID),
+    PORTFOLIO_SET_ID: (PREDICTION_SET_ID, MODEL_SET_ID, VALIDATION_SET_ID),
+    PORTFOLIO_SET_V2_ID: (
+        PREDICTION_SET_V3_ID,
+        MODEL_SET_V2_ID,
+        VALIDATION_SET_ID,
+    ),
+    PORTFOLIO_SET_V3_ID: (
+        PREDICTION_SET_V4_ID,
+        MODEL_SET_V3_ID,
+        SCREEN_VALIDATION_SET_ID,
+    ),
 }
 PORTFOLIO_SYMBOLS = (
     "AUDUSD",
@@ -89,11 +101,13 @@ class PortfolioConfig:
     def __post_init__(self) -> None:
         if self.id not in _PORTFOLIO_PROVENANCE:
             raise ValueError("portfolio id is not supported")
-        expected_prediction_set, expected_model_set = _PORTFOLIO_PROVENANCE[self.id]
+        expected_prediction_set, expected_model_set, expected_validation_set = (
+            _PORTFOLIO_PROVENANCE[self.id]
+        )
         if (
             self.prediction_set != expected_prediction_set
             or self.model_set != expected_model_set
-            or self.validation_set != VALIDATION_SET_ID
+            or self.validation_set != expected_validation_set
         ):
             raise ValueError("portfolio prediction provenance is incompatible")
         if self.symbols != PORTFOLIO_SYMBOLS:

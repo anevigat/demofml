@@ -1,0 +1,15 @@
+id = "causal-v2-screen-2021-v1"
+strategy = "expanding"
+interval_semantics = "half_open_utc"
+feature_set = "causal-v2"
+label_set = "executable-v2"
+train_start = "2018-01-01T00:00:00Z"
+first_validation_start = "2021-01-01T00:00:00Z"
+validation_window_months = 12
+step_months = 12
+development_end_exclusive = "2022-01-01T00:00:00Z"
+purge_minutes = 65
+max_horizon_minutes = 60
+max_quote_latency_minutes = 5
+locked_test_start = "2025-01-01T00:00:00Z"
+locked_test_end_exclusive = "2026-03-11T00:00:00Z"

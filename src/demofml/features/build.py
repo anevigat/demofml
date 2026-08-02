@@ -14,6 +14,11 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 from demofml.bars.quotes import validate_quote_bar_schema
 from demofml.data.progress import ProgressBar
 from demofml.features.causal import FEATURE_SCHEMA, CausalFeatureBuilder
+from demofml.features.causal_v2 import (
+    FEATURE_SET_V2_ID,
+    FEATURE_V2_SCHEMA,
+    CausalV2FeatureBuilder,
+)
 
 
 @dataclass(frozen=True)
@@ -24,7 +29,13 @@ class FeatureBuildResult:
     output_rows: int
 
 
-def build_features(source: Path, output: Path, symbol: str) -> FeatureBuildResult:
+def build_features(
+    source: Path,
+    output: Path,
+    symbol: str,
+    *,
+    feature_set: str = "causal-v1",
+) -> FeatureBuildResult:
     """Stream one symbol's quote bars into an atomic feature dataset."""
     source = source.expanduser().resolve()
     output = output.expanduser().resolve()
@@ -34,9 +45,20 @@ def build_features(source: Path, output: Path, symbol: str) -> FeatureBuildResul
         raise RuntimeError(f"Refusing to replace existing features: {output}")
 
     parquet = pq.ParquetFile(source)
-    validate_quote_bar_schema(parquet.schema_arrow)
+    builder: CausalFeatureBuilder | CausalV2FeatureBuilder
+    if feature_set == "causal-v1":
+        validate_quote_bar_schema(parquet.schema_arrow)
+        builder = CausalFeatureBuilder(symbol)
+        schema = FEATURE_SCHEMA
+    elif feature_set == FEATURE_SET_V2_ID:
+        from demofml.bars.quotes_v2 import validate_quote_bar_v2_schema
+
+        validate_quote_bar_v2_schema(parquet.schema_arrow)
+        builder = CausalV2FeatureBuilder(symbol)
+        schema = FEATURE_V2_SCHEMA
+    else:
+        raise ValueError(f"unsupported feature set: {feature_set}")
     progress = ProgressBar("features", parquet.metadata.num_rows)
-    builder = CausalFeatureBuilder(symbol)
     output.parent.mkdir(parents=True, exist_ok=True)
     partial = output.with_name(f".{output.name}.{uuid.uuid4().hex}.partial")
     input_rows = 0
@@ -46,7 +68,7 @@ def build_features(source: Path, output: Path, symbol: str) -> FeatureBuildResul
     try:
         writer = pq.ParquetWriter(
             partial,
-            FEATURE_SCHEMA,
+            schema,
             compression="zstd",
             use_dictionary=True,
             write_statistics=True,
@@ -91,6 +113,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--symbol", required=True)
+    parser.add_argument(
+        "--feature-set",
+        choices=("causal-v1", FEATURE_SET_V2_ID),
+        default="causal-v1",
+    )
     return parser
 
 
@@ -99,7 +126,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser = _parser()
     arguments = parser.parse_args(argv)
     try:
-        result = build_features(arguments.source, arguments.output, arguments.symbol)
+        result = build_features(
+            arguments.source,
+            arguments.output,
+            arguments.symbol,
+            feature_set=arguments.feature_set,
+        )
         print(
             f"built {result.output_rows} feature rows from "
             f"{result.input_bars} bars: {arguments.output}"

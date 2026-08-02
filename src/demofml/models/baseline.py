@@ -17,8 +17,18 @@ from sklearn.pipeline import Pipeline, make_pipeline  # type: ignore[import-unty
 from sklearn.preprocessing import StandardScaler  # type: ignore[import-untyped]
 
 from demofml.features.causal import FEATURE_SCHEMA, FEATURE_SET_ID
-from demofml.labels.executable import LABEL_SET_ID
+from demofml.features.causal_v2 import (
+    FEATURE_SET_V2_ID,
+    FEATURE_V2_COLUMNS,
+    FEATURE_V2_SCHEMA,
+)
+from demofml.labels.executable import (
+    LABEL_SET_ID,
+    LABEL_SET_V2_ID,
+    label_schema,
+)
 from demofml.validation.splits import (
+    SCREEN_VALIDATION_SET_ID,
     VALIDATION_SET_ID,
     ValidationPlan,
     select_fold_rows,
@@ -29,7 +39,33 @@ MODEL_SET_ID = "baseline-ridge-v1"
 PREDICTION_SET_ID = "walk-forward-predictions-v2"
 MODEL_SET_V2_ID = "baseline-ridge-v2"
 PREDICTION_SET_V3_ID = "walk-forward-predictions-v3"
+MODEL_SET_V3_ID = "baseline-ridge-v3"
+PREDICTION_SET_V4_ID = "walk-forward-predictions-v4"
 FEATURE_COLUMNS = tuple(FEATURE_SCHEMA.names[2:])
+_MODEL_CONTRACTS = {
+    MODEL_SET_ID: (
+        FEATURE_SET_ID,
+        LABEL_SET_ID,
+        VALIDATION_SET_ID,
+        PREDICTION_SET_ID,
+    ),
+    MODEL_SET_V2_ID: (
+        FEATURE_SET_ID,
+        LABEL_SET_ID,
+        VALIDATION_SET_ID,
+        PREDICTION_SET_V3_ID,
+    ),
+    MODEL_SET_V3_ID: (
+        FEATURE_SET_V2_ID,
+        LABEL_SET_V2_ID,
+        SCREEN_VALIDATION_SET_ID,
+        PREDICTION_SET_V4_ID,
+    ),
+}
+_FEATURE_CONTRACTS = {
+    FEATURE_SET_ID: (FEATURE_SCHEMA, FEATURE_COLUMNS),
+    FEATURE_SET_V2_ID: (FEATURE_V2_SCHEMA, FEATURE_V2_COLUMNS),
+}
 
 
 @dataclass(frozen=True)
@@ -59,12 +95,17 @@ class BaselineConfig:
     calibration_regression: str = "none"
 
     def __post_init__(self) -> None:
-        if self.id not in {MODEL_SET_ID, MODEL_SET_V2_ID}:
-            raise ValueError(f"model id must be {MODEL_SET_ID} or {MODEL_SET_V2_ID}")
-        if self.feature_set != FEATURE_SET_ID or self.label_set != LABEL_SET_ID:
-            raise ValueError("baseline feature and label sets are incompatible")
-        if self.validation_set != VALIDATION_SET_ID:
-            raise ValueError("baseline requires purged-walk-forward-v1")
+        if self.id not in _MODEL_CONTRACTS:
+            raise ValueError("model id is not supported")
+        feature_set, label_set, validation_set, _prediction_set = _MODEL_CONTRACTS[
+            self.id
+        ]
+        if self.validation_set != validation_set:
+            if self.id in {MODEL_SET_ID, MODEL_SET_V2_ID}:
+                raise ValueError("baseline requires purged-walk-forward-v1")
+            raise ValueError("baseline validation contract is incompatible")
+        if self.feature_set != feature_set or self.label_set != label_set:
+            raise ValueError("baseline data contracts are incompatible")
         if (
             not self.horizons_minutes
             or tuple(sorted(set(self.horizons_minutes))) != self.horizons_minutes
@@ -86,25 +127,35 @@ class BaselineConfig:
             raise ValueError("random_seed cannot be negative")
         if self.locked_test_policy != "forbidden":
             raise ValueError("locked test policy must remain forbidden")
-        if self.features != FEATURE_COLUMNS:
-            raise ValueError("baseline features do not match causal-v1")
-        if self.id == MODEL_SET_ID:
+        if self.features != _FEATURE_CONTRACTS[self.feature_set][1]:
+            raise ValueError(
+                f"baseline features do not match {self.feature_set}"
+            )
+        expected_selection = (
+            "purged-tail-monotone-affine-v1"
+            if self.id == MODEL_SET_V2_ID
+            else "static-threshold-v1"
+        )
+        if self.selection_policy != expected_selection:
+            raise ValueError("baseline selection policy does not match model id")
+        if expected_selection == "static-threshold-v1":
             if (
-                self.selection_policy != "static-threshold-v1"
-                or self.calibration_window_months != 0
+                self.calibration_window_months != 0
                 or self.calibration_purge_minutes != 0
                 or self.minimum_calibration_rows != 0
                 or self.calibration_regression != "none"
             ):
-                raise ValueError("baseline-ridge-v1 cannot define calibration")
-        elif (
-            self.selection_policy != "purged-tail-monotone-affine-v1"
-            or self.calibration_window_months != 1
-            or self.calibration_purge_minutes != 65
-            or self.minimum_calibration_rows < 2
-            or self.calibration_regression != "ols_nonnegative_slope"
-        ):
-            raise ValueError("baseline-ridge-v2 calibration contract is incompatible")
+                raise ValueError("static ridge cannot define calibration")
+        else:
+            if (
+                self.calibration_window_months != 1
+                or self.calibration_purge_minutes != 65
+                or self.minimum_calibration_rows < 2
+                or self.calibration_regression != "ols_nonnegative_slope"
+            ):
+                raise ValueError(
+                    "baseline-ridge-v2 calibration contract is incompatible"
+                )
 
     @property
     def action_threshold(self) -> float:
@@ -113,11 +164,7 @@ class BaselineConfig:
     @property
     def prediction_set(self) -> str:
         """Return the prediction contract emitted by this model version."""
-        return (
-            PREDICTION_SET_ID
-            if self.id == MODEL_SET_ID
-            else PREDICTION_SET_V3_ID
-        )
+        return _MODEL_CONTRACTS[self.id][3]
 
 
 @dataclass(frozen=True)
@@ -183,7 +230,7 @@ def prediction_schema(config: BaselineConfig) -> pa.Schema:
             pa.field("calibration_slope", pa.float64(), nullable=False),
             pa.field("calibration_rows", pa.int32(), nullable=False),
         ]
-        if config.id == MODEL_SET_V2_ID
+        if config.selection_policy == "purged-tail-monotone-affine-v1"
         else []
     )
     return pa.schema(
@@ -228,14 +275,21 @@ def prediction_schema(config: BaselineConfig) -> pa.Schema:
     )
 
 
-def _validate_feature_fields(schema: pa.Schema) -> None:
-    for name in ("symbol", "bar_end", *FEATURE_COLUMNS):
+def _validate_feature_fields(schema: pa.Schema, config: BaselineConfig) -> None:
+    expected_schema, expected_columns = _FEATURE_CONTRACTS[config.feature_set]
+    if config.feature_set == FEATURE_SET_V2_ID and not schema.equals(
+        expected_schema, check_metadata=True
+    ):
+        raise ValueError("feature schema does not exactly match causal-v2")
+    for name in ("symbol", "bar_end", *expected_columns):
         if name not in schema.names:
             raise ValueError(f"feature schema is missing {name}")
         actual = schema.field(name)
-        expected = FEATURE_SCHEMA.field(name)
+        expected = expected_schema.field(name)
         if actual.type != expected.type or actual.nullable != expected.nullable:
-            raise ValueError(f"feature field {name} does not match causal-v1")
+            raise ValueError(
+                f"feature field {name} does not match {config.feature_set}"
+            )
 
 
 def _float_column(table: pa.Table, name: str) -> NDArray[np.float64]:
@@ -257,7 +311,7 @@ def align_research_tables(
     if max(config.horizons_minutes) != plan.max_horizon_minutes:
         raise ValueError("model horizons and validation purge differ")
     validate_feature_label_schemas(features.schema, labels.schema, plan)
-    _validate_feature_fields(features.schema)
+    _validate_feature_fields(features.schema, config)
     required_labels = {
         "symbol",
         "decision_time",
@@ -271,6 +325,15 @@ def align_research_tables(
     missing_labels = required_labels.difference(labels.column_names)
     if missing_labels:
         raise ValueError(f"label schema is missing {sorted(missing_labels)}")
+    expected_labels = label_schema(
+        config.horizons_minutes,
+        0.0,
+        label_set=config.label_set,
+    )
+    if not labels.schema.equals(expected_labels, check_metadata=True):
+        raise ValueError(
+            f"label schema does not exactly match {config.label_set}"
+        )
     if features.num_rows == 0 or features.num_rows != labels.num_rows:
         raise ValueError("feature and label row counts must match and be non-zero")
     if not features.column("symbol").equals(labels.column("symbol")):
@@ -293,6 +356,8 @@ def align_research_tables(
             raise ValueError("research rows must be strictly ordered")
         if decision_time >= plan.locked_test_start:
             raise ValueError("locked-test rows are forbidden during development")
+        if decision_time > plan.development_end_exclusive:
+            raise ValueError("rows beyond the research cutoff are forbidden")
         previous = decision_time
 
     matrix = np.column_stack(
@@ -644,6 +709,8 @@ def run_walk_forward(
 ) -> pa.Table:
     """Train and score every development fold without touching the lock."""
     data = align_research_tables(features, labels, plan, config)
-    if config.id == MODEL_SET_ID:
+    if config.selection_policy == "static-threshold-v1":
         return _run_walk_forward_v1(data, plan, config)
-    return _run_walk_forward_v2(data, plan, config)
+    if config.selection_policy == "purged-tail-monotone-affine-v1":
+        return _run_walk_forward_v2(data, plan, config)
+    raise ValueError("baseline selection policy is not supported")

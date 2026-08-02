@@ -1,0 +1,13 @@
+id = "microstructure-screen-acceptance-v1"
+pipeline_set = "microstructure-screen-pipeline-v1"
+prediction_set = "walk-forward-predictions-v4"
+model_set = "baseline-ridge-v3"
+validation_set = "causal-v2-screen-2021-v1"
+symbols = ["AUDUSD", "EURCHF", "EURJPY", "EURUSD", "GBPJPY", "GBPUSD", "USDCAD", "USDJPY"]
+horizons_minutes = [15, 30, 60]
+minimum_mean_return_bps_exclusive = 0.0
+minimum_positive_symbols_per_horizon = 6
+minimum_trades_per_symbol_horizon = 100
+expected_fold_count = 1
+expected_stage_count = 43
+locked_test_policy = "forbidden"

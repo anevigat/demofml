@@ -56,6 +56,29 @@ resume after a failure, delete only the v2 Job and apply it again; verified
 checkpoints remain on `demofml-development-work-v1`. Never delete that PVC during
 a retry.
 
+## Microstructure Screen
+
+The pre-2022 screen is a separate digest-pinned, resumable Job. It reuses the
+development PVC, but has a distinct pipeline identity and never reads decisions
+from 2022 onward. Launch it only after the published image has passed CI and
+scanning, and only when no other development workload is active:
+
+```bash
+kubectl apply -f infra/k8s/jobs/development-pipeline-pvc.yaml
+kubectl apply --dry-run=server \
+  -f infra/k8s/jobs/microstructure-screen-2021-v1.yaml
+kubectl apply -f infra/k8s/jobs/microstructure-screen-2021-v1.yaml
+kubectl get job,pod -n demofml \
+  -l app.kubernetes.io/name=microstructure-screen
+```
+
+The Job executes `microstructure-screen-pipeline-v1` across all eight symbols
+and applies the frozen promotion gates after 43 verified stages. Job completion
+means technical success only; inspect the final acceptance artifact or MLflow
+metric `microstructure_screen_accepted` for the scientific decision. A rejected
+screen ends this research line and does not authorize a 2022-2024 or locked-test
+run.
+
 The private S3 Ingress is deliberately excluded from Kustomize so its hostname
 never appears in the public repository. Configure it locally:
 

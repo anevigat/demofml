@@ -441,6 +441,18 @@ only and cannot authorize promotion; the final acceptance envelope additionally
 verifies the pipeline run, stage inventory, screen checkpoint and config hashes.
 This pipeline does not authorize a 2022-2024 run or any locked-test access.
 
+The single authorized 2021 screen completed all 43 stages on runtime digest
+`sha256:a24cd0b03331eb743c00c077a292d8cc40553f9b0732949224eb5876c3201f9d`
+with pipeline run
+`sha256-76ca5d4051004414428fe4aff5a2a614a37cdfaca1106a971aa736118702d325`.
+It was rejected. Pooled executable means for 15/30/60 minutes were
+`-0.004315/-0.013522/-0.028682` bps, with only `1/3/3` positive symbols.
+The minimum-trade gate also failed in five 15-minute cells: AUDUSD 95, EURCHF
+78, GBPJPY 22, GBPUSD 46 and USDCAD 49. The diagnostic portfolio returned
+`-2.96%` with 3.25% maximum drawdown and 127,884 trades. The acceptance envelope
+sets `promotion_authorized=false` and `next_action=stop_microstructure_research_line`.
+Per the frozen protocol, this line is closed without a 2022-2024 follow-up.
+
 ## Frozen Candidate And One-Shot Locked Test
 
 Phase 13 protocol `locked-test-evaluation-v1` is fixed before development
@@ -500,8 +512,8 @@ Phase 5 publication and the full tick audit are complete. Phases 6-13 contracts
 and pipelines are implemented. The Phase 12 full-development run and the
 development-only calibrated follow-up both failed the unchanged acceptance
 criteria; the pre-2022 nonlinear screen also failed. Phase 13 remains inactive,
-and the locked test remains forbidden. The next planned research phase is the
-pre-2022 tick-microstructure feature screen described above.
+and the locked test remains forbidden. The pre-2022 tick-microstructure screen
+also failed all three promotion gates, so that research line is closed.
 
 ## License
 

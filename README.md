@@ -515,6 +515,14 @@ criteria; the pre-2022 nonlinear screen also failed. Phase 13 remains inactive,
 and the locked test remains forbidden. The pre-2022 tick-microstructure screen
 also failed all three promotion gates, so that research line is closed.
 
+Campaign 1 is formally closed in
+[`docs/research/campaign-1-closeout.md`](docs/research/campaign-1-closeout.md).
+The proposed Campaign 2 protocol is
+[`docs/research/campaign-2-prospective-factor-plan.md`](docs/research/campaign-2-prospective-factor-plan.md).
+It is planning-only: it introduces synchronous cross-pair currency factors and
+reserves `[2026-09-01, 2027-09-01)` as a prospective holdout. The existing
+locked test remains excluded, and no Campaign 2 performance run is authorized.
+
 ## License
 
 Licensed under the Apache License, Version 2.0. See `LICENSE`.

@@ -50,7 +50,6 @@ _SOURCE_PATHS = (
     "src/demofml/features/causal.py",
     "src/demofml/features/cross_pair.py",
     "src/demofml/prospective/__init__.py",
-    "src/demofml/prospective/aws_custody.py",
     "src/demofml/prospective/config.py",
     "src/demofml/prospective/records.py",
     "src/demofml/prospective/custody.py",
@@ -63,8 +62,7 @@ _SOURCE_PATHS = (
     "tests/unit/test_prospective_opportunities.py",
     "tests/unit/test_prospective_custody.py",
     "tests/unit/test_campaign2_verify.py",
-    "tests/unit/test_aws_custody.py",
-    "docs/research/campaign-2-aws-custody-requirements.md",
+    "docs/research/campaign-2-onprem-custody-requirements.md",
 )
 _CONTRACT_PATH_ROLES = {
     "snapshot/configs/prospective/campaign-2-engineering-v1.toml": (

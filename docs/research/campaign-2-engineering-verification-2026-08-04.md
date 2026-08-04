@@ -16,8 +16,9 @@ Run date: 2026-08-04
 - Result: `Complete`, one succeeded pod, zero restarts, `backoffLimit: 0`.
 
 The Job mounted no Secret, ServiceAccount token, data PVC, MinIO config, MLflow
-config, or AWS credential. A dedicated deny-all NetworkPolicy selected the Job
-pod. The base image and offline overlay were immutable and digest-bound.
+config, or external custody credential. A dedicated deny-all NetworkPolicy
+selected the Job pod. The base image and offline overlay were immutable and
+digest-bound.
 
 ## Identities
 
@@ -71,7 +72,8 @@ provenance generation, and multi-platform publication.
 
 The v2 Job used the contracts and application installed in the immutable
 runtime image. It had no init container, runtime overlay, Secret, ConfigMap,
-ServiceAccount token, data PVC, MinIO config, MLflow config, or AWS credential.
+ServiceAccount token, data PVC, MinIO config, MLflow config, or external custody
+credential.
 Its only volume was an ephemeral `/tmp` `emptyDir`; the deny-all NetworkPolicy
 continued to select the pod. All five engineering checks and all authorization
 denials matched v1.

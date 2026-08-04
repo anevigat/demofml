@@ -64,12 +64,13 @@ Before scoring begins, an external custodian must provide:
   acceptance code, and runtime digest.
 - A terminal claim store that researchers cannot delete or recreate.
 
-For the AWS provider contract, every raw object version must remain under S3
-Object Lock `COMPLIANCE` retention through at least `2028-09-01T00:00:00Z`.
-The exact metadata-only role, signed policy digests, KMS verification key,
-bucket, prefix, and prohibited API capabilities are specified in
-`campaign-2-aws-custody-requirements.md`. This repository does not provision or
-authorize those external resources.
+Custody remains on-prem. Every raw object version must remain under Object Lock
+`COMPLIANCE` retention through at least `2028-09-01T00:00:00Z`. The separate
+storage identities, signed policy digests, signing key, bucket, prefix, and
+prohibited capabilities are specified in
+`campaign-2-onprem-custody-requirements.md`. The shared development MinIO is not
+an eligible custody boundary, and this repository does not provision or
+authorize the required external resources.
 
 Each prediction must be committed before its horizon resolves. The commitment
 records model ID, symbol, horizon, score, action, decision boundary, maximum
@@ -286,11 +287,11 @@ models or data and cannot serve as the scoring candidate bundle required below.
 Its local checks cannot set `qualification_complete` without a separately
 trusted bundle ID and external attestation.
 
-The AWS metadata-only preflight verifier is also implemented with fake clients.
-It has no endpoint, credentials, or raw-read/write API and has not run against
-AWS. A real provider config, one-session role credentials, signed KMS
-attestation, archived policy digests, Object Lock bucket, and externally trusted
-runtime clock remain absent and externally controlled.
+No cloud provider is part of Campaign 2. A real on-prem custody tenant,
+least-privilege identities, signed custodian attestation, archived policy
+digests, Object Lock bucket, and externally trusted runtime clock remain absent
+and externally controlled. No real custody preflight is implemented or
+authorized.
 
 1. Approve this hypothesis shape and custody model.
 2. Publish a content-addressed append-only manifest for post-lock collection.
@@ -323,9 +324,10 @@ runtime clock remain absent and externally controlled.
 ## Authorization Required
 
 The user approved implementation of the hypothesis and custody architecture on
-2026-08-04. This authorizes schemas, deterministic transforms, synthetic tests,
-coverage checks, append-only manifest and bundle contracts, qualification
-claim envelopes, and outcome-free opportunity ledgers only. It does not authorize
+2026-08-04 and clarified that the project does not use AWS; custody must remain
+on-prem. This authorizes schemas, deterministic transforms, synthetic tests,
+coverage checks, append-only manifest and bundle contracts, qualification claim
+envelopes, and outcome-free opportunity ledgers only. It does not authorize
 fitting, scoring, raw prospective collection, or access to outcomes.
 Prospective scoring requires a second approval after the complete bundle is
 frozen. Evaluation remains prohibited until the prospective source interval

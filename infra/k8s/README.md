@@ -161,7 +161,7 @@ recreating a Job under another name. Before Phase 13 can be deployed, provision:
 - Admission controls pinning the candidate/runtime digest and forbidding retries.
 - `parallelism: 1`, `completions: 1`, `backoffLimit: 0` and `restartPolicy: Never`.
 
-The freeze workload must receive no AWS credentials. The eventual locked
+The freeze workload must receive no object-store credentials. The eventual locked
 workload must not mount `demofml-development-work-v1` or reuse the broad
 development secret. These are deployment blockers, not optional hardening.
 

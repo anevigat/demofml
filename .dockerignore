@@ -6,3 +6,6 @@
 !src/**
 !configs/
 !configs/**
+!docs/
+!docs/research/
+!docs/research/campaign-2-prospective-factor-plan.md

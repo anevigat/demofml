@@ -78,6 +78,35 @@ Its only volume was an ephemeral `/tmp` `emptyDir`; the deny-all NetworkPolicy
 continued to select the pod. All five engineering checks and all authorization
 denials matched v1.
 
+## On-Prem Custody Verification v3
+
+The provider correction was built and published by image workflow
+[`30905803174`](https://github.com/anevigat/demofml/actions/runs/30905803174),
+which passed CI, container smoke testing, HIGH/CRITICAL Trivy scans, SBOM and
+provenance generation, and multi-platform publication.
+
+- Source revision: `c161ebe44341b178bdd25271bd6160eef2bd45e9`.
+- Runtime image:
+  `anevigat/demofml@sha256:c86baaebef31cf0c696bb6bf570a97eb1a555fdc823cdb45b794e47047298d0e`.
+- Job: `demofml-campaign2-engineering-verify-v3`.
+- Pod: `demofml-campaign2-engineering-verify-v3-dczxh`.
+- Node: `wk-04`.
+- Start: `2026-08-04T12:38:49Z`.
+- Completion: `2026-08-04T12:39:34Z`.
+- Result: `Complete`, one succeeded pod, zero restarts, `backoffLimit: 0`.
+- Protocol SHA-256:
+  `923e25e6570a54a537f92956897c9c7fb639ec87ed2fc3f296280e08e61baf7d`.
+- Verification:
+  `sha256-3e86db4f30021a0fe6011d0d5e28616de45a6526fc19bcdab01f1def630455ef`.
+
+V3 binds Campaign 2 to on-prem custody requirements and contains no AWS custody
+module or cloud-provider preflight contract. The Job mounted no Secret,
+ConfigMap, ServiceAccount token, data PVC, MinIO configuration, MLflow
+configuration, or external custody credential. Its only volume was an
+ephemeral `/tmp` `emptyDir`, and the deny-all NetworkPolicy selected the pod.
+All five engineering checks passed while collection, fitting, scoring,
+evaluation, raw access, and qualification completion remained false.
+
 ## Interpretation
 
 Job completion establishes only that the Campaign 2 engineering contracts,

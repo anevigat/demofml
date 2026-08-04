@@ -1,0 +1,27 @@
+id = "causal-v1-cross-pair-v1"
+control = "causal-v1-prospective-control-v1"
+source = "prospective-quote-bars-v1"
+pairs = ["AUDUSD", "EURCHF", "EURJPY", "EURUSD", "GBPJPY", "GBPUSD", "USDCAD", "USDJPY"]
+currencies = ["AUD", "CAD", "CHF", "EUR", "GBP", "JPY"]
+usd_strength = 0.0
+solver = "closed_form_float64_v1"
+residual_dispersion = "two_pass_population_std"
+windows_bars = [1, 3, 12]
+gap_policy = "reset_cross_pair_windows"
+missing_pair_policy = "mark_both_arms_missing"
+forward_fill = false
+
+features = [
+  "base_strength_1",
+  "base_strength_sum_3",
+  "base_strength_sum_12",
+  "quote_strength_1",
+  "quote_strength_sum_3",
+  "quote_strength_sum_12",
+  "pair_factor_residual_1",
+  "pair_factor_residual_sum_3",
+  "pair_factor_residual_sum_12",
+  "cross_pair_residual_dispersion_1",
+  "cross_pair_residual_dispersion_mean_3",
+  "cross_pair_residual_dispersion_mean_12",
+]

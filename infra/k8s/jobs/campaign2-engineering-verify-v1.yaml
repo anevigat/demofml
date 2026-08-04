@@ -1,0 +1,170 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: demofml-campaign2-engineering-verify-deny-all
+  namespace: demofml
+  labels:
+    app.kubernetes.io/name: campaign2-engineering-verify
+    app.kubernetes.io/part-of: demofml
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: campaign2-engineering-verify
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: demofml-campaign2-engineering-verify-v1
+  namespace: demofml
+  labels:
+    app.kubernetes.io/name: campaign2-engineering-verify
+    app.kubernetes.io/part-of: demofml
+  annotations:
+    demofml.io/base-image: anevigat/demofml@sha256:a24cd0b03331eb743c00c077a292d8cc40553f9b0732949224eb5876c3201f9d
+    demofml.io/runtime-overlay-sha256: abccb11397f9002aa6b7897ff1bd56d3d5747b769801e97a2204e400932a6301
+    demofml.io/contracts-sha256: 42af2130e90b9434d5f7daec80a8343db911be02d1c86e0113447c4ccd9ad378
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 1209600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: campaign2-engineering-verify
+        app.kubernetes.io/part-of: demofml
+    spec:
+      restartPolicy: Never
+      serviceAccountName: demofml-workload
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      nodeSelector:
+        intechsol.com/workload: demofml
+      tolerations:
+        - key: intechsol.com/workload
+          operator: Equal
+          value: demofml
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: install-runtime-overlay
+          image: anevigat/demofml@sha256:a24cd0b03331eb743c00c077a292d8cc40553f9b0732949224eb5876c3201f9d
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              python - <<'PY'
+              import hashlib
+              from pathlib import Path
+
+              expected = {
+                  "demofml-0.1.0-py3-none-any.whl": "3e3a20771f4152554ed044e0bd8304e8707091cbe7dfafed9270466af37833ff",
+                  "tzdata-2025.2-py2.py3-none-any.whl": "1a403fada01ff9221ca8044d701868fa132215d84beb92242d9acd2147f667a8",
+              }
+              for name, digest in expected.items():
+                  observed = hashlib.sha256((Path("/wheels") / name).read_bytes()).hexdigest()
+                  if observed != digest:
+                      raise SystemExit(f"wheel digest mismatch: {name}")
+              PY
+              python -m pip install --no-index --no-deps --target /runtime /wheels/*.whl
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+              ephemeral-storage: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+              ephemeral-storage: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: wheels
+              mountPath: /wheels
+              readOnly: true
+            - name: runtime
+              mountPath: /runtime
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: verify
+          image: anevigat/demofml@sha256:a24cd0b03331eb743c00c077a292d8cc40553f9b0732949224eb5876c3201f9d
+          imagePullPolicy: IfNotPresent
+          args:
+            - verify-campaign2-engineering
+            - --config
+            - /contracts/configs/prospective/campaign-2-engineering-v1.toml
+            - --code-reference
+            - sha256:abccb11397f9002aa6b7897ff1bd56d3d5747b769801e97a2204e400932a6301
+            - --base-image-reference
+            - anevigat/demofml@sha256:a24cd0b03331eb743c00c077a292d8cc40553f9b0732949224eb5876c3201f9d
+          env:
+            - name: PYTHONPATH
+              value: /runtime
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+              ephemeral-storage: 128Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+              ephemeral-storage: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: runtime
+              mountPath: /runtime
+              readOnly: true
+            - name: contracts
+              mountPath: /contracts
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: wheels
+          configMap:
+            name: demofml-campaign2-wheels-abccb11397f9
+        - name: contracts
+          configMap:
+            name: demofml-campaign2-contracts-42af2130e90b
+            items:
+              - key: pyproject.toml
+                path: pyproject.toml
+              - key: campaign.toml
+                path: configs/prospective/campaign-2-engineering-v1.toml
+              - key: bars.toml
+                path: configs/bars/prospective-quote-bars-v1.toml
+              - key: features.toml
+                path: configs/features/cross-pair-v1.toml
+              - key: labels.toml
+                path: configs/experiments/prospective-executable-v1.toml
+              - key: protocol.md
+                path: docs/research/campaign-2-prospective-factor-plan.md
+        - name: runtime
+          emptyDir:
+            sizeLimit: 512Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi

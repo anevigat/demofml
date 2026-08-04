@@ -79,6 +79,32 @@ metric `microstructure_screen_accepted` for the scientific decision. A rejected
 screen ends this research line and does not authorize a 2022-2024 or locked-test
 run.
 
+## Campaign 2 Engineering Verification
+
+The Campaign 2 engineering Job is data-free and runs directly in the on-prem
+`demofml` namespace. It mounts immutable content-addressed wheel and contract
+ConfigMaps, has deny-all networking, receives no Secret or data PVC, and keeps
+every collection/model/scoring/evaluation authorization false.
+
+The checked-in v1 Job references the exact immutable ConfigMaps from the
+2026-08-04 run. They must already exist in the namespace with the annotation
+digests recorded below; do not recreate those names with different bytes. A new
+overlay or contract set requires new content-addressed ConfigMap names, a new Job
+version, and a new verification record.
+
+```bash
+kubectl --context admin@intechsol-k8s apply --dry-run=server \
+  -f infra/k8s/jobs/campaign2-engineering-verify-v1.yaml
+kubectl --context admin@intechsol-k8s apply \
+  -f infra/k8s/jobs/campaign2-engineering-verify-v1.yaml
+kubectl --context admin@intechsol-k8s -n demofml wait \
+  --for=condition=complete \
+  job/demofml-campaign2-engineering-verify-v1 --timeout=600s
+```
+
+The exact 2026-08-04 execution and verification identity are recorded in
+`docs/research/campaign-2-engineering-verification-2026-08-04.md`.
+
 The private S3 Ingress is deliberately excluded from Kustomize so its hostname
 never appears in the public repository. Configure it locally:
 

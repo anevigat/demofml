@@ -1,6 +1,7 @@
 # Research Campaign 2: Prospective Cross-Pair Factors
 
-Status: plan only; implementation and model execution are not authorized
+Status: engineering implementation authorized; fitting, scoring, and evaluation
+are not authorized
 
 Plan date: 2026-08-03
 
@@ -13,8 +14,10 @@ synchronous eight-pair quote cross-section contain prospective executable
 directional information beyond the existing independent per-pair features.
 
 This is a new cross-pair information set derived from the same raw quote source,
-not a new raw data source. Version 1 keeps the executable labels, horizons,
-costs, threshold, portfolio accounting, and per-symbol static ridge unchanged.
+not a new raw data source. Version 1 keeps the horizons, costs, threshold,
+portfolio accounting, and per-symbol static ridge unchanged. It uses the new
+`prospective-executable-v1` label contract because publication receipt time,
+rather than decision event time, determines entry eligibility.
 A paired `causal-v1` control and a `causal-v1 + cross-pair` candidate will use
 the same decisions so the incremental contribution is directly measurable.
 
@@ -32,6 +35,13 @@ observed during Campaign 1.
 | Collector qualification | `[2026-03-11, 2026-09-01)` | Schema, receipt-time, coverage, and infrastructure checks only; no return metrics. |
 | Prospective source interval | `[2026-09-01, 2027-09-01)` | Custodial one-shot holdout. |
 | Prospective decision interval | `[2026-09-01, 2027-08-31T22:55:00Z)` | Decisions whose complete 65-minute information window remains in the source interval. |
+
+The qualification collector may provide state-only context from
+`[2026-08-31T18:00:00Z, 2026-09-01T00:00:00Z)`. Context may initialize trailing
+features and the prior close needed by the first return. It cannot generate a
+decision, label, score, return, or metric and remains covered by the
+qualification custody policy. This context does not overlap the existing
+locked test.
 
 The exact candidate, control, preprocessing, calendar, data manifests,
 acceptance code, and runtime must be frozen before
@@ -54,6 +64,13 @@ Before scoring begins, an external custodian must provide:
   acceptance code, and runtime digest.
 - A terminal claim store that researchers cannot delete or recreate.
 
+For the AWS provider contract, every raw object version must remain under S3
+Object Lock `COMPLIANCE` retention through at least `2028-09-01T00:00:00Z`.
+The exact metadata-only role, signed policy digests, KMS verification key,
+bucket, prefix, and prohibited API capabilities are specified in
+`campaign-2-aws-custody-requirements.md`. This repository does not provision or
+authorize those external resources.
+
 Each prediction must be committed before its horizon resolves. The commitment
 records model ID, symbol, horizon, score, action, decision boundary, maximum
 feature receipt time, publication time, and artifact hash. Researchers may
@@ -74,20 +91,33 @@ available before entry. The prospective collector must add a trusted UTC
 For a bar ending at market boundary `T`:
 
 1. All eight bars must be complete.
-2. `feature_available_at` is the maximum `received_at` used by any bar plus a
-   frozen one-second computation allowance.
-3. The prediction must be durably published no earlier than
+2. A symbol bar `[T - 5 minutes, T)` becomes final only when the collector
+   receives that symbol's next quote with provider timestamp greater than or
+   equal to `T`. Version 1 does not accept synthetic or heartbeat watermarks.
+3. `bar_finalized_at` is the trusted `received_at` of that watermark. Any later
+   message older than the watermark is quarantined, records the affected
+   boundary as invalid, and terminally fails that symbol stream. It is a
+   qualification failure before launch and rejects version 1 after launch. It
+   is never inserted into an already published bar.
+4. `feature_available_at` is the maximum `bar_finalized_at` across all eight
+   symbols plus a frozen one-second computation allowance.
+5. The prediction must be durably published no earlier than
    `feature_available_at` and before any eligible entry.
-4. `published_at` must be no later than `T + 5 minutes`; otherwise the expected
+6. `published_at` must be no later than `T + 5 minutes`; otherwise the expected
    opportunity is recorded flat and missing.
-5. Entry is the first received executable quote after `published_at` and no
+7. Entry is the first received executable quote after `published_at` and no
    later than `T + 5 minutes`.
-6. Exit is the first received executable quote at or after `T + horizon` and no
+8. Exit is the first received executable quote at or after `T + horizon` and no
    later than `T + horizon + 5 minutes`.
 
 Five minutes is a maximum quote wait, not a fixed latency. The candidate bundle
-must freeze clock synchronization, receipt-timestamp precision, and behavior for
-late or reordered messages.
+uses nanosecond UTC receipt timestamps and strictly increasing unsigned ingest
+sequence numbers. Receipt time and sequence must be monotone. Provider time must
+be monotone within each symbol stream; reordered messages are quarantined and
+cannot mutate finalized state. Every persisted bar records the provider time and
+ingest sequence of its closing quote watermark. The frozen maximum provider
+clock lead is 100 milliseconds; the custody attestation must demonstrate that
+bound and identify the collector clock source.
 
 If trusted receipt time cannot be collected for all eight pairs, Campaign 2 is
 blocked before the holdout. Historical event-time simulation may test code but
@@ -108,10 +138,23 @@ y_pair(T) = log(mid_close_pair(T) / mid_close_pair(T - 5 minutes))
 ```
 
 The fixed design row contains `+1` for the base currency, `-1` for the quote
-currency, and zero elsewhere; USD contributes no column. Using float64, solve
-the unweighted system with the deterministic minimum-norm least-squares
-solution and a frozen numerical tolerance. The implementation contract must
-freeze the exact solver, tolerance, and golden vectors before holdout start.
+currency, and zero elsewhere; USD contributes no column. The six-column design
+has full rank. Version 1 therefore uses the following closed-form float64
+solution, not a library least-squares routine or a numerical rank tolerance.
+For inputs `a, x, u, e, v, g, d, j` in the fixed pair order:
+
+```text
+AUD = a
+CAD = -d
+JPY = (-u - v + e + g - 2j) / 4
+EUR = (u + e + JPY) / 2
+GBP = (v + g + JPY) / 2
+CHF = EUR - x
+```
+
+Residuals are then computed by direct float64 substitution in fixed pair order.
+Dispersion uses a deterministic two-pass population standard deviation. Golden
+vectors freeze operation order before holdout start.
 
 ```text
 strength(T) = argmin_s ||A s - y(T)||_2
@@ -177,9 +220,12 @@ Any bundle change consumes version 1 before prospective scoring begins.
 
 ## Coverage And Completeness
 
-The expected five-minute calendar runs from Sunday 17:00 through Friday 17:00
-in `America/New_York`, converted to UTC with the timezone database version frozen
-in the candidate bundle.
+The expected decision calendar runs from Sunday 17:05 inclusive through Friday
+16:00 exclusive in `America/New_York`, converted to UTC with the timezone
+database version frozen in the candidate bundle. The Sunday boundary requires
+the first complete `[17:00, 17:05)` bar. The Friday cutoff makes the last
+decision 15:55 so its 60-minute horizon and five-minute exit allowance end no
+later than the 17:00 market close.
 
 Version 1 requires:
 
@@ -190,6 +236,9 @@ Version 1 requires:
 - Exactly one committed control and candidate record per expected
   symbol/horizon opportunity, including explicit flat records for missing input.
 - All eight symbols present for the complete prospective decision interval.
+- Outcome-free qualification feature construction no slower than one second per
+  expected boundary and peak resident memory no greater than 1 GiB in the frozen
+  runtime.
 
 Coverage is computed without returns and may be monitored by the custodian.
 Failure discovered before the holdout blocks launch. Failure after holdout start
@@ -227,10 +276,27 @@ envelope.
 
 ## Implementation Milestones
 
+Engineering status as of 2026-08-04: receipt-time schemas, bars, synchronized
+features, expected-opportunity coverage, strict config loading, append-only
+manifest-chain validation, an engineering-only bundle, and an outcome-free
+prequalification envelope are implemented with synthetic tests. No collection
+manifest has been published, no real collector qualification has run, and no
+bundle has been externally timestamped. The engineering bundle contains no
+models or data and cannot serve as the scoring candidate bundle required below.
+Its local checks cannot set `qualification_complete` without a separately
+trusted bundle ID and external attestation.
+
+The AWS metadata-only preflight verifier is also implemented with fake clients.
+It has no endpoint, credentials, or raw-read/write API and has not run against
+AWS. A real provider config, one-session role credentials, signed KMS
+attestation, archived policy digests, Object Lock bucket, and externally trusted
+runtime clock remain absent and externally controlled.
+
 1. Approve this hypothesis shape and custody model.
 2. Publish a content-addressed append-only manifest for post-lock collection.
 3. Implement receipt-time ticks, synchronized bars, factor features, paired
-   scoring, and explicit missing opportunities.
+   feature construction, explicit missing opportunities, and later the
+   separately authorized paired scoring service.
 4. Add algebraic golden vectors, permutation, gap-reset, streaming,
    publication-time, and no-lookahead tests.
 5. Qualify schema, coverage, determinism, runtime, and memory without supervised
@@ -256,7 +322,11 @@ envelope.
 
 ## Authorization Required
 
-This document authorizes planning only. Implementation requires explicit
-approval of the hypothesis and custody architecture. Prospective scoring
-requires a second approval after the complete bundle is frozen. Evaluation
-remains prohibited until the prospective source interval closes.
+The user approved implementation of the hypothesis and custody architecture on
+2026-08-04. This authorizes schemas, deterministic transforms, synthetic tests,
+coverage checks, append-only manifest and bundle contracts, qualification
+claim envelopes, and outcome-free opportunity ledgers only. It does not authorize
+fitting, scoring, raw prospective collection, or access to outcomes.
+Prospective scoring requires a second approval after the complete bundle is
+frozen. Evaluation remains prohibited until the prospective source interval
+closes.

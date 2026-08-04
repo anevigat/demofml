@@ -1,0 +1,16 @@
+id = "prospective-quote-bars-v1"
+source = "prospective-ticks-v1"
+interval_minutes = 5
+interval_semantics = "half_open_provider_time"
+finalization = "next_received_quote_provider_time_gte_bar_end"
+late_message_policy = "quarantine_invalidate_boundary_and_fail_stream"
+compute_allowance_seconds = 1
+finish_policy = "discard_unwatermarked_open_bar"
+persist_watermark_provider_time = true
+persist_watermark_ingest_sequence = true
+
+[receipt_clock]
+timestamp_type = "utc_nanoseconds"
+attestation_required = true
+maximum_provider_clock_lead_ns = 100000000
+sequence_type = "strictly_increasing_uint64"

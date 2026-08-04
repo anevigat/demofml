@@ -517,11 +517,22 @@ also failed all three promotion gates, so that research line is closed.
 
 Campaign 1 is formally closed in
 [`docs/research/campaign-1-closeout.md`](docs/research/campaign-1-closeout.md).
-The proposed Campaign 2 protocol is
+The Campaign 2 engineering protocol is
 [`docs/research/campaign-2-prospective-factor-plan.md`](docs/research/campaign-2-prospective-factor-plan.md).
-It is planning-only: it introduces synchronous cross-pair currency factors and
-reserves `[2026-09-01, 2027-09-01)` as a prospective holdout. The existing
-locked test remains excluded, and no Campaign 2 performance run is authorized.
+Its outcome-free schemas, synchronous cross-pair factors, calendar, coverage
+ledger, strict config loader, append-only manifest contracts, engineering-only
+bundle, and prequalification claim envelope are implemented. It reserves
+`[2026-09-01, 2027-09-01)` as a prospective holdout. No real collector run or
+external bundle freeze has occurred. A metadata-only AWS Object Lock/KMS
+preflight verifier is implemented but has no real provider config, credentials,
+attestation, or execution. The existing locked test remains excluded; fitting,
+collection, scoring, evaluation, and every Campaign 2 performance run remain
+unauthorized.
+
+The data-free Campaign 2 engineering verification passed in the on-prem
+`demofml` namespace on 2026-08-04. Its immutable runtime/contract identities and
+non-authorization result are recorded in
+[`docs/research/campaign-2-engineering-verification-2026-08-04.md`](docs/research/campaign-2-engineering-verification-2026-08-04.md).
 
 ## License
 

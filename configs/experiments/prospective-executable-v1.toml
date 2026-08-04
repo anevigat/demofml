@@ -1,0 +1,14 @@
+id = "prospective-executable-v1"
+status = "contract_only_scoring_not_authorized"
+source = "prospective-ticks-v1"
+horizons_minutes = [15, 30, 60]
+decision_publication_deadline_minutes = 5
+max_entry_wait_minutes = 5
+max_exit_wait_minutes = 5
+entry = "first_received_executable_quote_after_published_at"
+exit = "first_received_executable_quote_at_or_after_decision_plus_horizon"
+missing_policy = "paired_flat_expected_opportunity"
+
+[returns]
+long = "exit_bid / entry_ask - 1"
+short = "1 - exit_ask / entry_bid"

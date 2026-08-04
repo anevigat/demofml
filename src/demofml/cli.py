@@ -33,6 +33,11 @@ def main(argv: Sequence[str] | None = None) -> None:
 
         evaluate_screen(values[1:])
         return
+    if values and values[0] == "verify-campaign2-engineering":
+        from demofml.prospective.verify import main as verify_campaign2
+
+        verify_campaign2(values[1:])
+        return
 
     parser = argparse.ArgumentParser(prog="demofml")
     parser.add_argument(
@@ -45,6 +50,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "freeze-candidate",
             "run-development",
             "smoke-infra",
+            "verify-campaign2-engineering",
         ],
     )
     arguments, remaining = parser.parse_known_args(values)

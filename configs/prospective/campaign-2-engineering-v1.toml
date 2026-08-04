@@ -1,0 +1,35 @@
+format_version = 1
+id = "prospective-cross-pair-factor-v1"
+status = "engineering_only"
+engineering_authorized_on = "2026-08-04"
+protocol = "../../docs/research/campaign-2-prospective-factor-plan.md"
+bar_config = "../bars/prospective-quote-bars-v1.toml"
+feature_config = "../features/cross-pair-v1.toml"
+label_contract = "../experiments/prospective-executable-v1.toml"
+calendar_id = "prospective-fx-5m-v1"
+timezone = "America/New_York"
+tzdata_version = "2025.2"
+symbols = ["AUDUSD", "EURCHF", "EURJPY", "EURUSD", "GBPJPY", "GBPUSD", "USDCAD", "USDJPY"]
+horizons_minutes = [15, 30, 60]
+historical_fit_start = "2018-01-01T00:00:00Z"
+historical_fit_end_exclusive = "2025-01-01T00:00:00Z"
+forbidden_start = "2025-01-01T00:00:00Z"
+forbidden_end_exclusive = "2026-03-11T00:00:00Z"
+qualification_start = "2026-03-11T00:00:00Z"
+context_start = "2026-08-31T18:00:00Z"
+prospective_start = "2026-09-01T00:00:00Z"
+decision_end_exclusive = "2027-08-31T22:55:00Z"
+prospective_end_exclusive = "2027-09-01T00:00:00Z"
+coverage_month_timezone = "UTC"
+minimum_complete_ratio = 0.95
+maximum_consecutive_missing_bars = 36
+maximum_feature_build_seconds_per_boundary = 1.0
+maximum_peak_rss_bytes = 1073741824
+
+[authorization]
+engineering = true
+fitting = false
+scoring = false
+collection = false
+evaluation = false
+raw_prospective_access = false

@@ -39,8 +39,10 @@ FROM runtime AS mlflow
 
 USER 0:0
 RUN python -m pip install \
-    "mlflow==3.14.0" \
-    "psycopg[binary]==3.3.4"
+    "mlflow==3.15.1" \
+    "psycopg[binary]==3.3.4" \
+    && python -m pip install --no-deps --upgrade "cryptography==50.0.0" \
+    && python -c "import cryptography, mlflow; assert mlflow.__version__ == '3.15.1'; assert cryptography.__version__ == '50.0.0'"
 USER 10001:10001
 
 ENTRYPOINT ["mlflow"]

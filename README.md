@@ -523,11 +523,11 @@ Its outcome-free schemas, synchronous cross-pair factors, calendar, coverage
 ledger, strict config loader, append-only manifest contracts, engineering-only
 bundle, and prequalification claim envelope are implemented. It reserves
 `[2026-09-01, 2027-09-01)` as a prospective holdout. No real collector run or
-external bundle freeze has occurred. A metadata-only AWS Object Lock/KMS
-preflight verifier is implemented but has no real provider config, credentials,
-attestation, or execution. The existing locked test remains excluded; fitting,
-collection, scoring, evaluation, and every Campaign 2 performance run remain
-unauthorized.
+external bundle freeze has occurred. Campaign 2 requires a separately
+administered on-prem custody boundary; the shared development MinIO is not
+eligible, and no real custody tenant, attestation, or preflight exists. The
+existing locked test remains excluded; fitting, collection, scoring, evaluation,
+and every Campaign 2 performance run remain unauthorized.
 
 The data-free Campaign 2 engineering verification passed in the on-prem
 `demofml` namespace on 2026-08-04. Its immutable runtime/contract identities and

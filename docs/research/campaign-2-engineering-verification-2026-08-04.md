@@ -4,7 +4,7 @@ Status: technical verification passed; no research or data capability authorized
 
 Run date: 2026-08-04
 
-## Kubernetes Execution
+## Kubernetes Execution v1
 
 - Context: `admin@intechsol-k8s`.
 - Namespace: `demofml`.
@@ -49,6 +49,32 @@ All five engineering checks passed:
 
 The runtime reported Python 3.12.13, NumPy 2.5.1, PyArrow 25.0.0,
 scikit-learn 1.9.0, and tzdata 2025.2.
+
+## Image-Native Verification v2
+
+The overlay-free verification ran after image workflow
+[`30901637929`](https://github.com/anevigat/demofml/actions/runs/30901637929)
+completed CI, container smoke testing, HIGH/CRITICAL Trivy scans, SBOM and
+provenance generation, and multi-platform publication.
+
+- Source revision: `f6ae9a59798b4aa12c93a0b98c170c1e93662457`.
+- Runtime image:
+  `anevigat/demofml@sha256:461660d383b7af4f621d139185b6fb48249b8c73c41e166df7f992e44263fcf5`.
+- Job: `demofml-campaign2-engineering-verify-v2`.
+- Pod: `demofml-campaign2-engineering-verify-v2-ct986`.
+- Node: `wk-04`.
+- Start: `2026-08-04T10:57:22Z`.
+- Completion: `2026-08-04T10:58:06Z`.
+- Result: `Complete`, one succeeded pod, zero restarts, `backoffLimit: 0`.
+- Verification:
+  `sha256-e028d74b57003ea41f24fcac85728c75543ac115de57856e7fdc5ed1e43ac8ab`.
+
+The v2 Job used the contracts and application installed in the immutable
+runtime image. It had no init container, runtime overlay, Secret, ConfigMap,
+ServiceAccount token, data PVC, MinIO config, MLflow config, or AWS credential.
+Its only volume was an ephemeral `/tmp` `emptyDir`; the deny-all NetworkPolicy
+continued to select the pod. All five engineering checks and all authorization
+denials matched v1.
 
 ## Interpretation
 

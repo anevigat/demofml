@@ -1,0 +1,93 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: demofml-campaign2-engineering-verify-deny-all
+  namespace: demofml
+  labels:
+    app.kubernetes.io/name: campaign2-engineering-verify
+    app.kubernetes.io/part-of: demofml
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: campaign2-engineering-verify
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: demofml-campaign2-engineering-verify-v2
+  namespace: demofml
+  labels:
+    app.kubernetes.io/name: campaign2-engineering-verify
+    app.kubernetes.io/part-of: demofml
+  annotations:
+    demofml.io/image: anevigat/demofml@sha256:461660d383b7af4f621d139185b6fb48249b8c73c41e166df7f992e44263fcf5
+    demofml.io/source-revision: f6ae9a59798b4aa12c93a0b98c170c1e93662457
+    demofml.io/image-workflow-run: "30901637929"
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 1209600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: campaign2-engineering-verify
+        app.kubernetes.io/part-of: demofml
+    spec:
+      restartPolicy: Never
+      serviceAccountName: demofml-workload
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      nodeSelector:
+        intechsol.com/workload: demofml
+      tolerations:
+        - key: intechsol.com/workload
+          operator: Equal
+          value: demofml
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: verify
+          image: anevigat/demofml@sha256:461660d383b7af4f621d139185b6fb48249b8c73c41e166df7f992e44263fcf5
+          imagePullPolicy: IfNotPresent
+          args:
+            - verify-campaign2-engineering
+            - --config
+            - /opt/demofml/configs/prospective/campaign-2-engineering-v1.toml
+            - --code-reference
+            - sha256:461660d383b7af4f621d139185b6fb48249b8c73c41e166df7f992e44263fcf5
+            - --base-image-reference
+            - anevigat/demofml@sha256:461660d383b7af4f621d139185b6fb48249b8c73c41e166df7f992e44263fcf5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+              ephemeral-storage: 128Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+              ephemeral-storage: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi

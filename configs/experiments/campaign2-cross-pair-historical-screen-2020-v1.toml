@@ -1,0 +1,65 @@
+format_version = 1
+id = "campaign2-cross-pair-historical-screen-2020-v1"
+status = "exploratory_only_non_confirmatory"
+declared_at = "2026-08-05T11:24:26Z"
+source_dataset = "cleaned-ticks-development-v1"
+source_feature_set = "causal-v1"
+source_label_set = "executable-v1"
+candidate_feature_set = "causal-v1-cross-pair-historical-screen-v1"
+symbols = ["AUDUSD", "EURCHF", "EURJPY", "EURUSD", "GBPJPY", "GBPUSD", "USDCAD", "USDJPY"]
+horizons_minutes = [15, 30, 60]
+train_start = "2018-01-01T00:00:00Z"
+train_end_exclusive = "2019-12-31T22:55:00Z"
+screen_start = "2020-01-01T00:00:00Z"
+decision_end_exclusive = "2020-12-31T22:55:00Z"
+source_end_exclusive = "2021-01-01T00:00:00Z"
+locked_test_start = "2025-01-01T00:00:00Z"
+purge_minutes = 65
+model_type = "ridge"
+alpha = 1.0
+solver = "lsqr"
+imputation = "training_median"
+standardize = true
+action_threshold_bps = 0.0
+random_seed = 1729
+missing_opportunity_return = 0.0
+denominator = "all_expected_calendar_boundaries_per_symbol_horizon"
+
+[authorization]
+historical_fitting = true
+historical_scoring = true
+historical_evaluation = true
+locked_test_access = false
+prospective_collection = false
+prospective_scoring = false
+confirmatory_claim = false
+
+[feature_sha256]
+AUDUSD = "fb3b00d3ac128b77697f7247b3f02fcfa5310a6751d23f47fbda458a07af2ba5"
+EURCHF = "6867a836247e5725c4264753efc78a793e68fbeaafa2e80268f4cac3c6508ce0"
+EURJPY = "0f20d89c5f2d5f621c84c7c5bbf513f6f4f66277667eae4dfed126367d81b43c"
+EURUSD = "e7fe7767f36bb55fb1ea771d809ae151adafe7f3fee84b9a08b2bd85c4ed9b90"
+GBPJPY = "2082ef278bfbd05b468704bddd5d19095d6661a9715ef800609177ce30a6859c"
+GBPUSD = "eff4db935d8621bfe7557a89a3481bd2c3d84b6348ba9e1d513ca6236e6fab93"
+USDCAD = "22e2858d32a1ca97ccbc50fb695b0fa145f2dee981d3eff742d763edc1d3c7bd"
+USDJPY = "752cd67d198462a2c4ad71b39b78f386ef37e45a5b8c991964a6e3aeb4be7c7e"
+
+[label_sha256]
+AUDUSD = "17c710c1150168e393c4ea1cde79919e7c56b70a13afeedf69c93f14e96a8ef3"
+EURCHF = "290848e1f8eecfcc3a49c1c0ff5ad99724b61e6ad31f3a94273a4564d9b91bdb"
+EURJPY = "0c2dc9d6bf8eed647de150018128c83efcccbbf103763b5481a45a447e4fb109"
+EURUSD = "bb2a95017583fa0ade20d3a39437ac6406f57e6569af7f0afbc4f101dc67c172"
+GBPJPY = "4bc29c96cf946c91742965ba85f084424aed69f9181a2827b32bd2fe9c1f4ba6"
+GBPUSD = "93a4286237b119ae18aa761edcffffbe40a5e847b40f63a497bd6318b42d5c25"
+USDCAD = "5f3964f6194a0aecc673e772ae2043a3355476304fb4d051bab52e0260dbc277"
+USDJPY = "b7a73bed93072d7c40ee9d2e8d24c156de2156b9f62d4c9c6d1fc71a66af6830"
+
+[expected_rows]
+AUDUSD = 520792
+EURCHF = 520423
+EURJPY = 520588
+EURUSD = 523696
+GBPJPY = 520497
+GBPUSD = 522378
+USDCAD = 520718
+USDJPY = 520915

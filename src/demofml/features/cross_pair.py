@@ -139,6 +139,72 @@ def solve_cross_pair_factor(pair_returns: Mapping[str, float]) -> FactorSolution
     return FactorSolution(strengths, residuals, math.sqrt(max(variance, 0.0)))
 
 
+class CrossPairFactorState:
+    """Maintain the frozen 3/12-boundary factor windows for every pair."""
+
+    def __init__(self) -> None:
+        self._strengths = {
+            currency: deque[float](maxlen=12) for currency in CURRENCIES
+        }
+        self._residuals = {symbol: deque[float](maxlen=12) for symbol in PAIRS}
+        self._dispersion: deque[float] = deque(maxlen=12)
+
+    def clear(self) -> None:
+        """Reset all cross-pair windows after an incomplete boundary or gap."""
+        for values in self._strengths.values():
+            values.clear()
+        for values in self._residuals.values():
+            values.clear()
+        self._dispersion.clear()
+
+    @staticmethod
+    def _sum_if_full(values: deque[float], size: int) -> float | None:
+        if len(values) < size:
+            return None
+        return sum(list(values)[-size:])
+
+    def _strength(self, currency: str) -> float:
+        return 0.0 if currency == "USD" else self._strengths[currency][-1]
+
+    def _strength_sum(self, currency: str, size: int) -> float | None:
+        if currency == "USD":
+            return 0.0 if len(self._dispersion) >= size else None
+        return self._sum_if_full(self._strengths[currency], size)
+
+    def push(
+        self, pair_returns: Mapping[str, float]
+    ) -> dict[str, tuple[float | None, ...]]:
+        """Append one complete factor solution and return all frozen columns."""
+        solution = solve_cross_pair_factor(pair_returns)
+        for currency in CURRENCIES:
+            self._strengths[currency].append(solution.strength(currency))
+        for symbol in PAIRS:
+            self._residuals[symbol].append(solution.residual(symbol))
+        self._dispersion.append(solution.residual_dispersion)
+
+        result: dict[str, tuple[float | None, ...]] = {}
+        for symbol in PAIRS:
+            base, quote = PAIR_CURRENCIES[symbol]
+            residual = self._residuals[symbol]
+            dispersion_3 = self._sum_if_full(self._dispersion, 3)
+            dispersion_12 = self._sum_if_full(self._dispersion, 12)
+            result[symbol] = (
+                self._strength(base),
+                self._strength_sum(base, 3),
+                self._strength_sum(base, 12),
+                self._strength(quote),
+                self._strength_sum(quote, 3),
+                self._strength_sum(quote, 12),
+                residual[-1],
+                self._sum_if_full(residual, 3),
+                self._sum_if_full(residual, 12),
+                self._dispersion[-1],
+                None if dispersion_3 is None else dispersion_3 / 3.0,
+                None if dispersion_12 is None else dispersion_12 / 12.0,
+            )
+        return result
+
+
 @dataclass(frozen=True)
 class SynchronizedCrossSection:
     """Closed expected boundary with either eight bars or explicit missingness."""
@@ -217,11 +283,7 @@ class PairedCrossPairFeatureBuilder:
 
     def __init__(self) -> None:
         self._causal = {symbol: CausalFeatureBuilder(symbol) for symbol in PAIRS}
-        self._strengths = {
-            currency: deque[float](maxlen=12) for currency in CURRENCIES
-        }
-        self._residuals = {symbol: deque[float](maxlen=12) for symbol in PAIRS}
-        self._dispersion: deque[float] = deque(maxlen=12)
+        self._cross_state = CrossPairFactorState()
         self._previous_boundary: datetime | None = None
 
     def push(self, section: SynchronizedCrossSection) -> PairedFeatureBatch:
@@ -303,37 +365,15 @@ class PairedCrossPairFeatureBuilder:
                 False,
             )
 
-        solution = solve_cross_pair_factor(returns)
-        for currency in CURRENCIES:
-            self._strengths[currency].append(solution.strength(currency))
-        for symbol in PAIRS:
-            self._residuals[symbol].append(solution.residual(symbol))
-        self._dispersion.append(solution.residual_dispersion)
+        cross_rows = self._cross_state.push(returns)
 
         candidate_rows = []
         for control_row in control_rows:
             symbol = str(control_row["symbol"])
-            base, quote = PAIR_CURRENCIES[symbol]
-            residual = self._residuals[symbol]
             candidate_rows.append(
                 {
                     **control_row,
-                    "base_strength_1": self._latest_strength(base),
-                    "base_strength_sum_3": self._strength_sum(base, 3),
-                    "base_strength_sum_12": self._strength_sum(base, 12),
-                    "quote_strength_1": self._latest_strength(quote),
-                    "quote_strength_sum_3": self._strength_sum(quote, 3),
-                    "quote_strength_sum_12": self._strength_sum(quote, 12),
-                    "pair_factor_residual_1": residual[-1],
-                    "pair_factor_residual_sum_3": self._sum_if_full(residual, 3),
-                    "pair_factor_residual_sum_12": self._sum_if_full(residual, 12),
-                    "cross_pair_residual_dispersion_1": self._dispersion[-1],
-                    "cross_pair_residual_dispersion_mean_3": self._mean_if_full(
-                        self._dispersion, 3
-                    ),
-                    "cross_pair_residual_dispersion_mean_12": self._mean_if_full(
-                        self._dispersion, 12
-                    ),
+                    **dict(zip(CROSS_PAIR_COLUMNS, cross_rows[symbol], strict=True)),
                 }
             )
         candidate = pa.Table.from_pylist(
@@ -366,31 +406,4 @@ class PairedCrossPairFeatureBuilder:
         return {str(name): value for name, value in row.items()}
 
     def _clear_cross_state(self) -> None:
-        for values in self._strengths.values():
-            values.clear()
-        for values in self._residuals.values():
-            values.clear()
-        self._dispersion.clear()
-
-    def _latest_strength(self, currency: str) -> float:
-        if currency == "USD":
-            return 0.0
-        return self._strengths[currency][-1]
-
-    def _strength_sum(self, currency: str, size: int) -> float | None:
-        if currency == "USD":
-            if len(self._dispersion) >= size:
-                return 0.0
-            return None
-        return self._sum_if_full(self._strengths[currency], size)
-
-    @staticmethod
-    def _sum_if_full(values: deque[float], size: int) -> float | None:
-        if len(values) < size:
-            return None
-        return sum(list(values)[-size:])
-
-    @staticmethod
-    def _mean_if_full(values: deque[float], size: int) -> float | None:
-        total = PairedCrossPairFeatureBuilder._sum_if_full(values, size)
-        return None if total is None else total / size
+        self._cross_state.clear()

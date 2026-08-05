@@ -38,6 +38,11 @@ def main(argv: Sequence[str] | None = None) -> None:
 
         verify_campaign2(values[1:])
         return
+    if values and values[0] == "run-cross-pair-historical-screen":
+        from demofml.reporting.cross_pair_historical import main as run_screen
+
+        run_screen(values[1:])
+        return
 
     parser = argparse.ArgumentParser(prog="demofml")
     parser.add_argument(
@@ -49,6 +54,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "evaluate-microstructure-screen",
             "freeze-candidate",
             "run-development",
+            "run-cross-pair-historical-screen",
             "smoke-infra",
             "verify-campaign2-engineering",
         ],

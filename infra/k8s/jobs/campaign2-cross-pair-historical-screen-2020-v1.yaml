@@ -1,0 +1,148 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: demofml-campaign2-cross-pair-screen-deny-all
+  namespace: demofml
+  labels:
+    app.kubernetes.io/name: campaign2-cross-pair-historical-screen
+    app.kubernetes.io/part-of: demofml
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: campaign2-cross-pair-historical-screen
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: demofml-campaign2-cross-pair-screen-2020-v1
+  namespace: demofml
+  labels:
+    app.kubernetes.io/name: campaign2-cross-pair-historical-screen
+    app.kubernetes.io/part-of: demofml
+  annotations:
+    demofml.io/image: anevigat/demofml@sha256:051c4c7106a4149d1e9f5a497329eae25aec22b422c87c0e7496340a8a524df5
+    demofml.io/source-revision: 33c1271090fad52376459ad4f3af25634a7dc8cf
+    demofml.io/image-workflow-run: "31001894554"
+    demofml.io/input-run: sha256-c8903538bf0c2a81cd866e318e4eb6ac0a8abf21fedd96eee8b10322ebf41758
+    demofml.io/research-scope: exploratory-only
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 1209600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: campaign2-cross-pair-historical-screen
+        app.kubernetes.io/part-of: demofml
+    spec:
+      restartPolicy: Never
+      serviceAccountName: demofml-workload
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      nodeSelector:
+        intechsol.com/workload: demofml
+      tolerations:
+        - key: intechsol.com/workload
+          operator: Equal
+          value: demofml
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: create-output-directory
+          image: anevigat/demofml@sha256:051c4c7106a4149d1e9f5a497329eae25aec22b422c87c0e7496340a8a524df5
+          imagePullPolicy: IfNotPresent
+          command: [mkdir]
+          args:
+            - -p
+            - /work/campaign2-cross-pair-historical-screen-2020-v1
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: work
+              mountPath: /work
+      containers:
+        - name: screen
+          image: anevigat/demofml@sha256:051c4c7106a4149d1e9f5a497329eae25aec22b422c87c0e7496340a8a524df5
+          imagePullPolicy: IfNotPresent
+          args:
+            - run-cross-pair-historical-screen
+            - --config
+            - /opt/demofml/configs/experiments/campaign2-cross-pair-historical-screen-2020-v1.toml
+            - --feature
+            - AUDUSD=/work/development-pipeline-v2/sha256-c8903538bf0c2a81cd866e318e4eb6ac0a8abf21fedd96eee8b10322ebf41758/symbols/AUDUSD/features-full.parquet
+            - --feature
+            - EURCHF=/work/development-pipeline-v2/sha256-c8903538bf0c2a81cd866e318e4eb6ac0a8abf21fedd96eee8b10322ebf41758/symbols/EURCHF/features-full.parquet
+            - --feature
+            - EURJPY=/work/development-pipeline-v2/sha256-c8903538bf0c2a81cd866e318e4eb6ac0a8abf21fedd96eee8b10322ebf41758/symbols/EURJPY/features-full.parquet
+            - --feature
+            - EURUSD=/work/development-pipeline-v2/sha256-c8903538bf0c2a81cd866e318e4eb6ac0a8abf21fedd96eee8b10322ebf41758/symbols/EURUSD/features-full.parquet
+            - --feature
+            - GBPJPY=/work/development-pipeline-v2/sha256-c8903538bf0c2a81cd866e318e4eb6ac0a8abf21fedd96eee8b10322ebf41758/symbols/GBPJPY/features-full.parquet
+            - --feature
+            - GBPUSD=/work/development-pipeline-v2/sha256-c8903538bf0c2a81cd866e318e4eb6ac0a8abf21fedd96eee8b10322ebf41758/symbols/GBPUSD/features-full.parquet
+            - --feature
+            - USDCAD=/work/development-pipeline-v2/sha256-c8903538bf0c2a81cd866e318e4eb6ac0a8abf21fedd96eee8b10322ebf41758/symbols/USDCAD/features-full.parquet
+            - --feature
+            - USDJPY=/work/development-pipeline-v2/sha256-c8903538bf0c2a81cd866e318e4eb6ac0a8abf21fedd96eee8b10322ebf41758/symbols/USDJPY/features-full.parquet
+            - --label
+            - AUDUSD=/work/development-pipeline-v2/sha256-c8903538bf0c2a81cd866e318e4eb6ac0a8abf21fedd96eee8b10322ebf41758/symbols/AUDUSD/labels-full.parquet
+            - --label
+            - EURCHF=/work/development-pipeline-v2/sha256-c8903538bf0c2a81cd866e318e4eb6ac0a8abf21fedd96eee8b10322ebf41758/symbols/EURCHF/labels-full.parquet
+            - --label
+            - EURJPY=/work/development-pipeline-v2/sha256-c8903538bf0c2a81cd866e318e4eb6ac0a8abf21fedd96eee8b10322ebf41758/symbols/EURJPY/labels-full.parquet
+            - --label
+            - EURUSD=/work/development-pipeline-v2/sha256-c8903538bf0c2a81cd866e318e4eb6ac0a8abf21fedd96eee8b10322ebf41758/symbols/EURUSD/labels-full.parquet
+            - --label
+            - GBPJPY=/work/development-pipeline-v2/sha256-c8903538bf0c2a81cd866e318e4eb6ac0a8abf21fedd96eee8b10322ebf41758/symbols/GBPJPY/labels-full.parquet
+            - --label
+            - GBPUSD=/work/development-pipeline-v2/sha256-c8903538bf0c2a81cd866e318e4eb6ac0a8abf21fedd96eee8b10322ebf41758/symbols/GBPUSD/labels-full.parquet
+            - --label
+            - USDCAD=/work/development-pipeline-v2/sha256-c8903538bf0c2a81cd866e318e4eb6ac0a8abf21fedd96eee8b10322ebf41758/symbols/USDCAD/labels-full.parquet
+            - --label
+            - USDJPY=/work/development-pipeline-v2/sha256-c8903538bf0c2a81cd866e318e4eb6ac0a8abf21fedd96eee8b10322ebf41758/symbols/USDJPY/labels-full.parquet
+            - --output
+            - /work/campaign2-cross-pair-historical-screen-2020-v1/report.json
+            - --code-reference
+            - sha256:051c4c7106a4149d1e9f5a497329eae25aec22b422c87c0e7496340a8a524df5
+          resources:
+            requests:
+              cpu: "2"
+              memory: 8Gi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: "4"
+              memory: 24Gi
+              ephemeral-storage: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: work
+          persistentVolumeClaim:
+            claimName: demofml-development-work-v1
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi

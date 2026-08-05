@@ -1,4 +1,5 @@
 import tomllib
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -10,15 +11,18 @@ from demofml.features.cross_pair import (
     CONTROL_FEATURE_SCHEMA,
     PairedFeatureBatch,
 )
+from demofml.prospective.campaigns import CAMPAIGN_V1, CAMPAIGN_V2
 from demofml.prospective.config import load_campaign2_engineering_config
 from demofml.prospective.opportunities import (
     assert_outcome_free_schema,
     materialize_expected_opportunities,
+    opportunity_schema,
     summarize_coverage,
     validate_opportunity_ledger,
 )
 
 PROJECT_ROOT = Path(__file__).parents[2]
+CONFIG_PATH = PROJECT_ROOT / "configs/prospective/campaign-2-engineering-v2.toml"
 
 
 def _batch(
@@ -94,8 +98,10 @@ def _feature_table(
 
 
 def test_opportunity_ledger_has_48_paired_outcome_free_rows() -> None:
-    decision = datetime(2026, 9, 1, tzinfo=UTC)
-    ledger = materialize_expected_opportunities(_batch(decision, ready=True))
+    decision = datetime(2027, 3, 1, tzinfo=UTC)
+    ledger = materialize_expected_opportunities(
+        _batch(decision, ready=True), campaign=CAMPAIGN_V2
+    )
 
     validate_opportunity_ledger(ledger, (decision,))
     assert ledger.num_rows == 48
@@ -109,22 +115,26 @@ def test_opportunity_ledger_has_48_paired_outcome_free_rows() -> None:
 
 
 def test_coverage_counts_explicit_missing_and_late_boundaries() -> None:
-    first = datetime(2026, 9, 1, tzinfo=UTC)
+    first = datetime(2027, 3, 1, tzinfo=UTC)
     ledgers = [
-        materialize_expected_opportunities(_batch(first, ready=True)),
+        materialize_expected_opportunities(
+            _batch(first, ready=True), campaign=CAMPAIGN_V2
+        ),
         materialize_expected_opportunities(
             _batch(
                 first + timedelta(minutes=5),
                 ready=False,
                 missing_symbols=("EURUSD",),
-            )
+            ),
+            campaign=CAMPAIGN_V2,
         ),
         materialize_expected_opportunities(
             _batch(
                 first + timedelta(minutes=10),
                 ready=True,
                 available_delay=timedelta(minutes=6),
-            )
+            ),
+            campaign=CAMPAIGN_V2,
         ),
     ]
     ledger = pa.concat_tables(ledgers)
@@ -135,9 +145,7 @@ def test_coverage_counts_explicit_missing_and_late_boundaries() -> None:
     assert report.complete_sections == 1
     assert report.complete_ratio == pytest.approx(1 / 4)
     assert report.maximum_consecutive_missing == 3
-    config = load_campaign2_engineering_config(
-        PROJECT_ROOT / "configs/prospective/campaign-2-engineering-v1.toml"
-    )
+    config = load_campaign2_engineering_config(CONFIG_PATH)
     assert not report.passes(config)
 
 
@@ -146,18 +154,18 @@ def test_engineering_schema_rejects_score_and_outcome_columns() -> None:
     with pytest.raises(ValueError, match="forbidden columns"):
         assert_outcome_free_schema(forbidden)
 
-    decision = datetime(2026, 9, 1, tzinfo=UTC)
+    decision = datetime(2027, 3, 1, tzinfo=UTC)
     malicious = _batch(
         decision,
         ready=False,
         missing_symbols=("return_bps:12",),
     )
     with pytest.raises(ValueError, match="canonical Campaign 2 symbols"):
-        materialize_expected_opportunities(malicious)
+        materialize_expected_opportunities(malicious, campaign=CAMPAIGN_V2)
 
 
 def test_campaign_config_authorizes_engineering_only() -> None:
-    path = PROJECT_ROOT / "configs/prospective/campaign-2-engineering-v1.toml"
+    path = CONFIG_PATH
     loaded = load_campaign2_engineering_config(path)
     with path.open("rb") as source:
         config = tomllib.load(source)
@@ -177,3 +185,57 @@ def test_campaign_config_authorizes_engineering_only() -> None:
         "evaluation": False,
         "raw_prospective_access": False,
     }
+
+
+def test_v2_dates_and_identities_are_frozen_while_v1_creation_is_closed() -> None:
+    loaded = load_campaign2_engineering_config(CONFIG_PATH)
+    historical = load_campaign2_engineering_config(
+        PROJECT_ROOT / "configs/prospective/campaign-2-engineering-v1.toml"
+    )
+
+    assert loaded.spec is CAMPAIGN_V2
+    assert historical.spec is CAMPAIGN_V1
+    assert loaded.qualification_start == datetime(2026, 9, 1, tzinfo=UTC)
+    assert loaded.context_start == datetime(2027, 2, 28, 18, tzinfo=UTC)
+    assert loaded.prospective_start == datetime(2027, 3, 1, tzinfo=UTC)
+    assert loaded.decision_end_exclusive == datetime(
+        2028, 2, 29, 22, 55, tzinfo=UTC
+    )
+    assert loaded.prospective_end_exclusive == datetime(2028, 3, 1, tzinfo=UTC)
+    with pytest.raises(ValueError, match="artifact creation is closed"):
+        materialize_expected_opportunities(
+            _batch(datetime(2026, 9, 1, tzinfo=UTC), ready=True),
+            campaign=CAMPAIGN_V1,
+        )
+    forged_v1 = replace(CAMPAIGN_V1, artifact_creation_open=True)
+    with pytest.raises(ValueError, match="canonical campaign spec"):
+        materialize_expected_opportunities(
+            _batch(datetime(2027, 3, 1, tzinfo=UTC), ready=True),
+            campaign=forged_v1,
+        )
+    with pytest.raises(ValueError, match="outside the campaign evidence interval"):
+        materialize_expected_opportunities(
+            _batch(datetime(2026, 8, 31, tzinfo=UTC), ready=True),
+            campaign=CAMPAIGN_V2,
+        )
+
+
+def test_historical_v1_ledger_remains_verifiable() -> None:
+    decision = datetime(2027, 3, 1, tzinfo=UTC)
+    current = materialize_expected_opportunities(
+        _batch(decision, ready=True), campaign=CAMPAIGN_V2
+    )
+    historical_rows = [
+        {
+            **row,
+            "campaign_id": CAMPAIGN_V1.campaign_id,
+            "ledger_id": CAMPAIGN_V1.opportunity_ledger_id,
+        }
+        for row in current.to_pylist()
+    ]
+    historical = pa.Table.from_pylist(
+        historical_rows,
+        schema=opportunity_schema(CAMPAIGN_V1),
+    )
+
+    validate_opportunity_ledger(historical, (decision,))

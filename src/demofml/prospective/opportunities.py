@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from functools import cache
 from itertools import product
 from typing import TYPE_CHECKING
 
@@ -19,12 +20,18 @@ from demofml.features.cross_pair import (
     PAIRS,
     PairedFeatureBatch,
 )
+from demofml.prospective.campaigns import (
+    CAMPAIGN_V1,
+    CampaignSpec,
+    campaign_spec,
+    campaign_spec_for,
+)
 
 if TYPE_CHECKING:
     from demofml.prospective.config import Campaign2EngineeringConfig
 
-CAMPAIGN_ID = "prospective-cross-pair-factor-v1"
-OPPORTUNITY_LEDGER_ID = "prospective-opportunities-v1"
+CAMPAIGN_ID = CAMPAIGN_V1.campaign_id
+OPPORTUNITY_LEDGER_ID = CAMPAIGN_V1.opportunity_ledger_id
 ARMS = ("control", "candidate")
 HORIZONS_MINUTES = (15, 30, 60)
 CONTROL_FEATURE_SET_ID = "causal-v1-prospective-control-v1"
@@ -34,29 +41,38 @@ OPPORTUNITY_STATUSES = (
     "factor_warmup",
     "late_feature",
 )
-OPPORTUNITY_SCHEMA = pa.schema(
-    [
-        pa.field("campaign_id", pa.string(), nullable=False),
-        pa.field("ledger_id", pa.string(), nullable=False),
-        pa.field("arm", pa.string(), nullable=False),
-        pa.field("feature_set_id", pa.string(), nullable=False),
-        pa.field("symbol", pa.string(), nullable=False),
-        pa.field("horizon_minutes", pa.int16(), nullable=False),
-        pa.field("decision_time", pa.timestamp("ns", tz="UTC"), nullable=False),
-        pa.field(
-            "publication_deadline", pa.timestamp("ns", tz="UTC"), nullable=False
-        ),
-        pa.field("feature_available_at", pa.timestamp("ns", tz="UTC")),
-        pa.field("status", pa.string(), nullable=False),
-        pa.field("missing_reason", pa.string()),
-    ],
-    metadata={
-        b"demofml.ledger": OPPORTUNITY_LEDGER_ID.encode(),
+@cache
+def opportunity_schema(campaign: CampaignSpec) -> pa.Schema:
+    """Return the outcome-free schema bound to one campaign identity."""
+    metadata = {
+        b"demofml.ledger": campaign.opportunity_ledger_id.encode(),
         b"demofml.calendar": CALENDAR_ID.encode(),
         b"demofml.authorization": b"engineering_only_no_scores_or_outcomes",
         b"demofml.expected_rows_per_boundary": b"48",
-    },
-)
+    }
+    if campaign is not CAMPAIGN_V1:
+        metadata[b"demofml.campaign"] = campaign.campaign_id.encode()
+    return pa.schema(
+        [
+            pa.field("campaign_id", pa.string(), nullable=False),
+            pa.field("ledger_id", pa.string(), nullable=False),
+            pa.field("arm", pa.string(), nullable=False),
+            pa.field("feature_set_id", pa.string(), nullable=False),
+            pa.field("symbol", pa.string(), nullable=False),
+            pa.field("horizon_minutes", pa.int16(), nullable=False),
+            pa.field("decision_time", pa.timestamp("ns", tz="UTC"), nullable=False),
+            pa.field(
+                "publication_deadline", pa.timestamp("ns", tz="UTC"), nullable=False
+            ),
+            pa.field("feature_available_at", pa.timestamp("ns", tz="UTC")),
+            pa.field("status", pa.string(), nullable=False),
+            pa.field("missing_reason", pa.string()),
+        ],
+        metadata=metadata,
+    )
+
+
+OPPORTUNITY_SCHEMA = opportunity_schema(CAMPAIGN_V1)
 _FORBIDDEN_COLUMN_PARTS = (
     "score",
     "action",
@@ -72,9 +88,10 @@ _FORBIDDEN_COLUMN_PARTS = (
 )
 
 
-def empty_opportunities() -> pa.Table:
+def empty_opportunities(*, campaign: CampaignSpec) -> pa.Table:
     """Return an empty table with the qualification-safe ledger schema."""
-    return pa.Table.from_batches([], schema=OPPORTUNITY_SCHEMA)
+    campaign.require_artifact_creation()
+    return pa.Table.from_batches([], schema=opportunity_schema(campaign))
 
 
 def assert_outcome_free_schema(schema: pa.Schema) -> None:
@@ -98,9 +115,20 @@ def assert_outcome_free_schema(schema: pa.Schema) -> None:
         raise ValueError(f"engineering ledger contains forbidden columns: {forbidden}")
 
 
-def materialize_expected_opportunities(batch: PairedFeatureBatch) -> pa.Table:
+def materialize_expected_opportunities(
+    batch: PairedFeatureBatch,
+    *,
+    campaign: CampaignSpec,
+) -> pa.Table:
     """Create both arms for every symbol/horizon without scores or outcomes."""
+    campaign.require_artifact_creation()
     _validate_feature_batch(batch)
+    if not (
+        campaign.qualification_start
+        <= batch.decision_time
+        < campaign.decision_end_exclusive
+    ):
+        raise ValueError("decision_time is outside the campaign evidence interval")
     deadline = batch.decision_time + timedelta(minutes=5)
     if batch.missing_symbols:
         status = "missing_input"
@@ -123,8 +151,8 @@ def materialize_expected_opportunities(batch: PairedFeatureBatch) -> pa.Table:
     }
     rows = [
         {
-            "campaign_id": CAMPAIGN_ID,
-            "ledger_id": OPPORTUNITY_LEDGER_ID,
+            "campaign_id": campaign.campaign_id,
+            "ledger_id": campaign.opportunity_ledger_id,
             "arm": arm,
             "feature_set_id": feature_sets[arm],
             "symbol": symbol,
@@ -137,7 +165,27 @@ def materialize_expected_opportunities(batch: PairedFeatureBatch) -> pa.Table:
         }
         for arm, symbol, horizon in product(ARMS, PAIRS, HORIZONS_MINUTES)
     ]
-    return pa.Table.from_pylist(rows, schema=OPPORTUNITY_SCHEMA)
+    return pa.Table.from_pylist(rows, schema=opportunity_schema(campaign))
+
+
+def _campaign_for_ledger(ledger: pa.Table) -> CampaignSpec:
+    metadata = ledger.schema.metadata or {}
+    raw_campaign = metadata.get(b"demofml.campaign")
+    raw_ledger = metadata.get(b"demofml.ledger")
+    try:
+        if raw_campaign is None:
+            # Historical v1 schemas predate the explicit campaign metadata key.
+            campaign = campaign_spec_for(
+                "opportunity_ledger_id",
+                None if raw_ledger is None else raw_ledger.decode("ascii"),
+            )
+        else:
+            campaign = campaign_spec(raw_campaign.decode("ascii"))
+    except UnicodeDecodeError as error:
+        raise ValueError("opportunity ledger metadata is not ASCII") from error
+    if raw_ledger != campaign.opportunity_ledger_id.encode():
+        raise ValueError("opportunity ledger metadata identity mismatch")
+    return campaign
 
 
 def _validate_feature_batch(batch: PairedFeatureBatch) -> None:
@@ -190,7 +238,8 @@ def validate_opportunity_ledger(
     expected_boundaries: tuple[datetime, ...] | None = None,
 ) -> None:
     """Validate exact keys and explicit status for every expected opportunity."""
-    if ledger.schema != OPPORTUNITY_SCHEMA:
+    campaign = _campaign_for_ledger(ledger)
+    if ledger.schema != opportunity_schema(campaign):
         raise ValueError("opportunity ledger schema or metadata mismatch")
     assert_outcome_free_schema(ledger.schema)
     rows = ledger.to_pylist()
@@ -205,6 +254,12 @@ def validate_opportunity_ledger(
         decision_time = row["decision_time"]
         if not isinstance(decision_time, datetime):
             raise ValueError("decision_time cannot be null")
+        if not (
+            campaign.qualification_start
+            <= decision_time
+            < campaign.decision_end_exclusive
+        ):
+            raise ValueError("decision_time is outside the campaign evidence interval")
         key = (
             row["arm"],
             row["symbol"],
@@ -215,9 +270,9 @@ def validate_opportunity_ledger(
             raise ValueError("duplicate expected-opportunity key")
         keys.add(key)
         arm = str(row["arm"])
-        if row["campaign_id"] != CAMPAIGN_ID:
+        if row["campaign_id"] != campaign.campaign_id:
             raise ValueError("unexpected campaign_id")
-        if row["ledger_id"] != OPPORTUNITY_LEDGER_ID:
+        if row["ledger_id"] != campaign.opportunity_ledger_id:
             raise ValueError("unexpected ledger_id")
         if arm not in feature_sets or row["feature_set_id"] != feature_sets[arm]:
             raise ValueError("arm and feature_set_id do not match")

@@ -18,8 +18,9 @@ from demofml.features.cross_pair import (
     CONTROL_FEATURE_SCHEMA,
     solve_cross_pair_factor,
 )
+from demofml.prospective.campaigns import CAMPAIGN_V1
 from demofml.prospective.config import load_campaign2_engineering_config
-from demofml.prospective.opportunities import CAMPAIGN_ID, OPPORTUNITY_SCHEMA
+from demofml.prospective.opportunities import opportunity_schema
 from demofml.prospective.records import (
     IMAGE_DIGEST_PATTERN,
     canonical_json,
@@ -27,7 +28,7 @@ from demofml.prospective.records import (
     write_immutable_json,
 )
 
-ENGINEERING_VERIFY_SET_ID = "campaign-2-onprem-engineering-verify-v1"
+ENGINEERING_VERIFY_SET_ID = CAMPAIGN_V1.engineering_verify_set_id
 _IMAGE_REFERENCE_PATTERN = re.compile(r"anevigat/demofml@sha256:[0-9a-f]{64}")
 
 
@@ -62,6 +63,7 @@ def build_engineering_verification(
     if _IMAGE_REFERENCE_PATTERN.fullmatch(base_image_reference) is None:
         raise ValueError("base_image_reference must be the immutable runtime image")
     config = load_campaign2_engineering_config(config_path)
+    config.spec.require_artifact_creation()
 
     pair_returns = {
         "AUDUSD": 0.01,
@@ -91,7 +93,7 @@ def build_engineering_verification(
         "prospective_bars": _schema_sha256(PROSPECTIVE_BAR_SCHEMA),
         "control_features": _schema_sha256(CONTROL_FEATURE_SCHEMA),
         "candidate_features": _schema_sha256(CANDIDATE_FEATURE_SCHEMA),
-        "opportunities": _schema_sha256(OPPORTUNITY_SCHEMA),
+        "opportunities": _schema_sha256(opportunity_schema(config.spec)),
     }
     runtime = {
         "python": platform.python_version(),
@@ -169,8 +171,8 @@ def build_engineering_verification(
     verified = all(check["status"] == "pass" for check in checks)
     core: dict[str, object] = {
         "format_version": 1,
-        "verification_set": ENGINEERING_VERIFY_SET_ID,
-        "campaign_id": CAMPAIGN_ID,
+        "verification_set": config.spec.engineering_verify_set_id,
+        "campaign_id": config.spec.campaign_id,
         "deployment_scope": "onprem_kubernetes_engineering_only",
         "code_reference": code_reference,
         "base_image_reference": base_image_reference,

@@ -14,11 +14,16 @@ from demofml.features.cross_pair import (
     CANDIDATE_FEATURE_SCHEMA,
     CONTROL_FEATURE_SCHEMA,
 )
+from demofml.prospective.campaigns import (
+    CAMPAIGN_V1,
+    CampaignSpec,
+    campaign_spec,
+)
 from demofml.prospective.config import (
     Campaign2EngineeringConfig,
     load_campaign2_engineering_config,
 )
-from demofml.prospective.opportunities import CAMPAIGN_ID, OPPORTUNITY_SCHEMA
+from demofml.prospective.opportunities import opportunity_schema
 from demofml.prospective.records import (
     CONTENT_ID_PATTERN,
     IMAGE_DIGEST_PATTERN,
@@ -29,7 +34,7 @@ from demofml.prospective.records import (
     write_immutable_json,
 )
 
-ENGINEERING_BUNDLE_SET_ID = "campaign-2-engineering-bundle-v1"
+ENGINEERING_BUNDLE_SET_ID = CAMPAIGN_V1.engineering_bundle_set_id
 ENGINEERING_BUNDLE_SCOPE = "engineering_contract_only_no_models_or_data"
 _AUTHORIZATION = {
     "engineering": True,
@@ -39,7 +44,7 @@ _AUTHORIZATION = {
     "evaluation": False,
     "raw_prospective_access": False,
 }
-_SOURCE_PATHS = (
+_V1_SOURCE_PATHS = (
     "pyproject.toml",
     "configs/features/causal-v1.toml",
     "src/demofml/data/ticks.py",
@@ -64,32 +69,28 @@ _SOURCE_PATHS = (
     "tests/unit/test_campaign2_verify.py",
     "docs/research/campaign-2-onprem-custody-requirements.md",
 )
-_CONTRACT_PATH_ROLES = {
-    "snapshot/configs/prospective/campaign-2-engineering-v1.toml": (
-        "engineering_config",
-        "engineering",
-    ),
-    "snapshot/docs/research/campaign-2-prospective-factor-plan.md": (
-        "protocol",
-        "protocol",
-    ),
-    "snapshot/configs/bars/prospective-quote-bars-v1.toml": (
-        "bar_config",
-        "bars",
-    ),
-    "snapshot/configs/features/cross-pair-v1.toml": (
-        "feature_config",
-        "features",
-    ),
-    "snapshot/configs/experiments/prospective-executable-v1.toml": (
-        "label_contract",
-        "labels",
-    ),
-}
-_EXPECTED_SNAPSHOT_PATHS = {
-    *(f"snapshot/{path}" for path in _SOURCE_PATHS),
-    *_CONTRACT_PATH_ROLES,
-}
+
+
+def _source_paths(campaign: CampaignSpec) -> tuple[str, ...]:
+    if campaign is CAMPAIGN_V1:
+        return _V1_SOURCE_PATHS
+    return (
+        *_V1_SOURCE_PATHS,
+        "src/demofml/prospective/campaigns.py",
+        "docs/research/campaign-2-prospective-factor-plan.md",
+        "docs/research/campaign-2-v1-qualification-blocker-2026-08-05.md",
+    )
+
+
+def _expected_snapshot_paths(campaign: CampaignSpec) -> set[str]:
+    contracts = {
+        campaign.engineering_config_relative_path,
+        campaign.protocol_relative_path,
+        "configs/bars/prospective-quote-bars-v1.toml",
+        "configs/features/cross-pair-v1.toml",
+        "configs/experiments/prospective-executable-v1.toml",
+    }
+    return {f"snapshot/{path}" for path in (*_source_paths(campaign), *contracts)}
 
 
 def _schema_sha256(schema: pa.Schema) -> str:
@@ -107,13 +108,13 @@ def _runtime_versions() -> dict[str, str]:
     }
 
 
-def _schema_hashes() -> dict[str, str]:
+def _schema_hashes(campaign: CampaignSpec) -> dict[str, str]:
     return {
         "prospective_ticks": _schema_sha256(PROSPECTIVE_TICK_SCHEMA),
         "prospective_bars": _schema_sha256(PROSPECTIVE_BAR_SCHEMA),
         "control_features": _schema_sha256(CONTROL_FEATURE_SCHEMA),
         "candidate_features": _schema_sha256(CANDIDATE_FEATURE_SCHEMA),
-        "opportunities": _schema_sha256(OPPORTUNITY_SCHEMA),
+        "opportunities": _schema_sha256(opportunity_schema(campaign)),
     }
 
 
@@ -125,7 +126,7 @@ def _source_inventory(config: Campaign2EngineeringConfig) -> list[dict[str, obje
         config.feature_config_path: "feature_config",
         config.label_contract_path: "label_contract",
     }
-    for relative in _SOURCE_PATHS:
+    for relative in _source_paths(config.spec):
         unresolved = config.project_root / relative
         if unresolved.is_symlink():
             raise RuntimeError(f"engineering bundle source is a symlink: {relative}")
@@ -161,6 +162,7 @@ def freeze_engineering_bundle(
     if IMAGE_DIGEST_PATTERN.fullmatch(code_reference) is None:
         raise ValueError("code_reference must be an immutable sha256 image digest")
     config = load_campaign2_engineering_config(config_path)
+    config.spec.require_artifact_creation()
     requested = output.expanduser().absolute()
     if requested.exists() or requested.is_symlink():
         raise RuntimeError(f"refusing to replace engineering bundle: {requested}")
@@ -174,12 +176,17 @@ def freeze_engineering_bundle(
         {key: value for key, value in record.items() if key != "payload"}
         for record in inventory_with_payload
     ]
+    contract_roles = {
+        "engineering_config": "engineering",
+        "protocol": "protocol",
+        "bar_config": "bars",
+        "feature_config": "features",
+        "label_contract": "labels",
+    }
     contract_sha256 = {
-        contract_role: str(record["sha256"])
+        contract_roles[str(record["role"])]: str(record["sha256"])
         for record in inventory
-        if (roles := _CONTRACT_PATH_ROLES.get(str(record["path"]))) is not None
-        for expected_role, contract_role in (roles,)
-        if record["role"] == expected_role
+        if record["role"] in contract_roles
     }
     if set(contract_sha256) != {
         "engineering",
@@ -191,15 +198,15 @@ def freeze_engineering_bundle(
         raise RuntimeError("captured bundle contracts do not reconcile")
     core: dict[str, object] = {
         "format_version": 1,
-        "bundle_set": ENGINEERING_BUNDLE_SET_ID,
-        "campaign_id": CAMPAIGN_ID,
+        "bundle_set": config.spec.engineering_bundle_set_id,
+        "campaign_id": config.spec.campaign_id,
         "bundle_scope": ENGINEERING_BUNDLE_SCOPE,
         "code_reference": code_reference,
         "authorization": _AUTHORIZATION,
         "scoring_authorized": False,
         "contract_sha256": contract_sha256,
         "runtime_versions": _runtime_versions(),
-        "schema_sha256": _schema_hashes(),
+        "schema_sha256": _schema_hashes(config.spec),
         "inventory": inventory,
     }
     manifest = {**core, "bundle_id": content_id(core)}
@@ -304,11 +311,11 @@ def verify_engineering_bundle(
     }
     if set(manifest) != expected_manifest_fields:
         raise ValueError("engineering bundle manifest fields are incompatible")
+    campaign = campaign_spec(manifest["campaign_id"])
     if (
         type(manifest["format_version"]) is not int
         or manifest["format_version"] != 1
-        or manifest["bundle_set"] != ENGINEERING_BUNDLE_SET_ID
-        or manifest["campaign_id"] != CAMPAIGN_ID
+        or manifest["bundle_set"] != campaign.engineering_bundle_set_id
         or manifest["bundle_scope"] != ENGINEERING_BUNDLE_SCOPE
         or not isinstance(manifest["authorization"], dict)
         or any(type(value) is not bool for value in manifest["authorization"].values())
@@ -413,11 +420,11 @@ def verify_engineering_bundle(
             contract_inventory[contract_role] = digest
     if contract_inventory != manifest["contract_sha256"]:
         raise ValueError("bundle contract hashes do not reconcile with inventory")
-    if expected_paths != _EXPECTED_SNAPSHOT_PATHS:
+    if expected_paths != _expected_snapshot_paths(campaign):
         raise ValueError(
             "bundle inventory differs from the frozen engineering allowlist"
         )
-    if manifest["schema_sha256"] != _schema_hashes():
+    if manifest["schema_sha256"] != _schema_hashes(campaign):
         raise ValueError("bundle schema hashes differ from the trusted verifier")
     actual_paths = {
         path.relative_to(bundle_root).as_posix()
@@ -433,11 +440,13 @@ def verify_engineering_bundle(
         raise ValueError("engineering bundle content ID mismatch")
 
     bundled_config = (
-        bundle_root
-        / "snapshot/configs/prospective/campaign-2-engineering-v1.toml"
+        bundle_root / "snapshot" / campaign.engineering_config_relative_path
     )
     validated_config = load_campaign2_engineering_config(bundled_config)
-    if validated_config.contract_sha256 != manifest["contract_sha256"]:
+    if (
+        validated_config.spec != campaign
+        or validated_config.contract_sha256 != manifest["contract_sha256"]
+    ):
         raise ValueError("bundled contracts fail engineering-only validation")
 
     marker = read_strict_json(marker_path, "engineering-only marker")

@@ -2,10 +2,12 @@ from pathlib import Path
 
 import pytest
 
+from demofml.prospective.campaigns import CAMPAIGN_V1, CAMPAIGN_V2
 from demofml.prospective.verify import build_engineering_verification, main
 
 PROJECT_ROOT = Path(__file__).parents[2]
-CONFIG = PROJECT_ROOT / "configs/prospective/campaign-2-engineering-v1.toml"
+CONFIG = PROJECT_ROOT / "configs/prospective/campaign-2-engineering-v2.toml"
+V1_CONFIG = PROJECT_ROOT / "configs/prospective/campaign-2-engineering-v1.toml"
 CODE_REFERENCE = "sha256:" + "a" * 64
 BASE_IMAGE = "anevigat/demofml@sha256:" + "b" * 64
 
@@ -18,6 +20,8 @@ def test_campaign2_engineering_verification_is_data_free_and_non_authorizing() -
     )
 
     assert report["engineering_verified"] is True
+    assert report["campaign_id"] == CAMPAIGN_V2.campaign_id
+    assert report["verification_set"] == CAMPAIGN_V2.engineering_verify_set_id
     assert report["deployment_scope"] == "onprem_kubernetes_engineering_only"
     assert report["qualification_complete"] is False
     assert report["collection_authorized"] is False
@@ -70,3 +74,13 @@ def test_campaign2_verification_rejects_mutable_image_reference() -> None:
             code_reference=CODE_REFERENCE,
             base_image_reference="anevigat/demofml:main",
         )
+
+
+def test_campaign2_verification_rejects_new_v1_report() -> None:
+    with pytest.raises(ValueError, match="artifact creation is closed"):
+        build_engineering_verification(
+            V1_CONFIG,
+            code_reference=CODE_REFERENCE,
+            base_image_reference=BASE_IMAGE,
+        )
+    assert CAMPAIGN_V1.artifact_creation_open is False

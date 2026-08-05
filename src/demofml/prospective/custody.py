@@ -11,15 +11,15 @@ from demofml.data.prospective_ticks import (
     ProspectiveTickQualityReport,
 )
 from demofml.features.cross_pair import PAIRS
-from demofml.prospective.opportunities import CAMPAIGN_ID
+from demofml.prospective.campaigns import CAMPAIGN_V1, CampaignSpec, campaign_spec
 from demofml.prospective.records import (
     CONTENT_ID_PATTERN,
     SHA256_PATTERN,
     content_id,
 )
 
-COLLECTION_MANIFEST_SET_ID = "prospective-collection-segment-v1"
-COLLECTION_TERMINAL_SET_ID = "prospective-collection-terminal-v1"
+COLLECTION_MANIFEST_SET_ID = CAMPAIGN_V1.collection_manifest_set_id
+COLLECTION_TERMINAL_SET_ID = CAMPAIGN_V1.collection_terminal_set_id
 _UINT64_MAX = 2**64 - 1
 PROSPECTIVE_TICK_SCHEMA_SHA256 = hashlib.sha256(
     PROSPECTIVE_TICK_SCHEMA.serialize().to_pybytes()
@@ -229,6 +229,7 @@ def _validate_object_key(value: str) -> None:
 
 def build_collection_segment(
     *,
+    campaign: CampaignSpec,
     sequence: int,
     previous_segment_id: str | None,
     symbol: str,
@@ -239,6 +240,7 @@ def build_collection_segment(
     recorded_at: datetime,
 ) -> dict[str, object]:
     """Build a content-addressed metadata record without reading the raw object."""
+    campaign.require_artifact_creation()
     if symbol not in PAIRS:
         raise ValueError(f"unsupported Campaign 2 symbol {symbol}")
     _validate_object_key(claim.object_key)
@@ -282,6 +284,13 @@ def build_collection_segment(
         and recorded_at >= claim.received_end_exclusive
     ):
         raise ValueError("collection object time ranges are incompatible")
+    if not (
+        campaign.qualification_start <= claim.provider_start
+        and claim.provider_end_exclusive <= campaign.prospective_end_exclusive
+        and campaign.qualification_start <= claim.received_start
+        and claim.received_end_exclusive <= campaign.prospective_end_exclusive
+    ):
+        raise ValueError("collection object falls outside the campaign interval")
     if any(
         not claim.provider_start < boundary <= claim.provider_end_exclusive
         for boundary in quality.invalidated_boundaries
@@ -294,8 +303,8 @@ def build_collection_segment(
         _content_id(previous_segment_id, "previous_segment_id")
     core: dict[str, object] = {
         "format_version": 1,
-        "manifest_set": COLLECTION_MANIFEST_SET_ID,
-        "campaign_id": CAMPAIGN_ID,
+        "manifest_set": campaign.collection_manifest_set_id,
+        "campaign_id": campaign.campaign_id,
         "authorization": _SEGMENT_AUTHORIZATION,
         "scoring_authorized": False,
         "sequence": sequence,
@@ -384,10 +393,10 @@ def validate_collection_segment(segment: Mapping[str, object]) -> None:
     }
     if set(segment) != expected:
         raise ValueError("collection segment fields are incompatible")
+    campaign = campaign_spec(segment["campaign_id"])
     if (
         segment["format_version"] != 1
-        or segment["manifest_set"] != COLLECTION_MANIFEST_SET_ID
-        or segment["campaign_id"] != CAMPAIGN_ID
+        or segment["manifest_set"] != campaign.collection_manifest_set_id
         or segment["authorization"] != _SEGMENT_AUTHORIZATION
         or segment["scoring_authorized"] is not False
         or segment["symbol"] not in PAIRS
@@ -462,6 +471,13 @@ def validate_collection_segment(segment: Mapping[str, object]) -> None:
         and recorded_at >= received_end
     ):
         raise ValueError("collection object time ranges are incompatible")
+    if not (
+        campaign.qualification_start <= provider_start
+        and provider_end <= campaign.prospective_end_exclusive
+        and campaign.qualification_start <= received_start
+        and received_end <= campaign.prospective_end_exclusive
+    ):
+        raise ValueError("collection object falls outside the campaign interval")
     attestation = segment["collector_attestation"]
     if not isinstance(attestation, dict) or set(attestation) != {"id", "sha256"}:
         raise ValueError("collector attestation fields are incompatible")
@@ -487,6 +503,7 @@ def validate_collection_chain(
     segments: Sequence[Mapping[str, object]],
     *,
     expected_symbol: str | None = None,
+    expected_campaign: CampaignSpec | None = None,
 ) -> CollectionChainSummary:
     """Verify predecessor hashes and monotone ranges for one symbol chain."""
     if not segments:
@@ -497,8 +514,14 @@ def validate_collection_chain(
     total_critical = 0
     symbol: str | None = None
     attestation_id: object | None = None
+    campaign: CampaignSpec | None = expected_campaign
     for index, segment in enumerate(segments):
         validate_collection_segment(segment)
+        current_campaign = campaign_spec(segment["campaign_id"])
+        if campaign is None:
+            campaign = current_campaign
+        elif current_campaign != campaign:
+            raise ValueError("collection campaign changed within a chain")
         current_symbol = str(segment["symbol"])
         if symbol is None:
             symbol = current_symbol
@@ -572,9 +595,24 @@ def _validate_monotone_segments(
 def build_collection_terminal(
     chains: Mapping[str, Sequence[Mapping[str, object]]],
     *,
+    campaign: CampaignSpec,
     recorded_at: datetime,
 ) -> dict[str, object]:
     """Bind all eight verified symbol chains into one outcome-free terminal."""
+    campaign.require_artifact_creation()
+    return _build_collection_terminal(
+        chains,
+        campaign=campaign,
+        recorded_at=recorded_at,
+    )
+
+
+def _build_collection_terminal(
+    chains: Mapping[str, Sequence[Mapping[str, object]]],
+    *,
+    campaign: CampaignSpec,
+    recorded_at: datetime,
+) -> dict[str, object]:
     if set(chains) != set(PAIRS):
         raise ValueError("terminal manifest requires all eight symbol chains")
     object_identities: set[object] = set()
@@ -588,7 +626,11 @@ def build_collection_terminal(
                 raise ValueError("terminal reuses an object key across symbols")
             object_identities.add(identity)
     summaries = [
-        validate_collection_chain(chains[symbol], expected_symbol=symbol)
+        validate_collection_chain(
+            chains[symbol],
+            expected_symbol=symbol,
+            expected_campaign=campaign,
+        )
         for symbol in PAIRS
     ]
     latest_recorded = max(
@@ -599,8 +641,8 @@ def build_collection_terminal(
         raise ValueError("terminal record cannot predate a symbol chain")
     core: dict[str, object] = {
         "format_version": 1,
-        "terminal_set": COLLECTION_TERMINAL_SET_ID,
-        "campaign_id": CAMPAIGN_ID,
+        "terminal_set": campaign.collection_terminal_set_id,
+        "campaign_id": campaign.campaign_id,
         "authorization": _SEGMENT_AUTHORIZATION,
         "scoring_authorized": False,
         "chains": [
@@ -637,7 +679,14 @@ def validate_collection_terminal(
         "terminal_id",
     }:
         raise ValueError("collection terminal fields are incompatible")
+    campaign = campaign_spec(terminal["campaign_id"])
+    if terminal["terminal_set"] != campaign.collection_terminal_set_id:
+        raise ValueError("collection terminal identity is incompatible")
     recorded_at = _parse_utc(terminal["recorded_at"], "recorded_at")
-    expected = build_collection_terminal(chains, recorded_at=recorded_at)
+    expected = _build_collection_terminal(
+        chains,
+        campaign=campaign,
+        recorded_at=recorded_at,
+    )
     if dict(terminal) != expected:
         raise ValueError("collection terminal does not reconcile with its chains")

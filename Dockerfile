@@ -29,6 +29,7 @@ RUN python -m pip install /wheels/*.whl \
 COPY configs/ /opt/demofml/configs/
 COPY pyproject.toml /opt/demofml/pyproject.toml
 COPY docs/research/campaign-2-prospective-factor-plan.md /opt/demofml/docs/research/campaign-2-prospective-factor-plan.md
+COPY docs/research/campaign-2-prospective-factor-v2.md /opt/demofml/docs/research/campaign-2-prospective-factor-v2.md
 
 USER 10001:10001
 WORKDIR /home/demofml

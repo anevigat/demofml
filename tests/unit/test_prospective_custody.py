@@ -12,6 +12,7 @@ from demofml.prospective.bundle import (
     freeze_engineering_bundle,
     verify_engineering_bundle,
 )
+from demofml.prospective.campaigns import CAMPAIGN_V1, CAMPAIGN_V2
 from demofml.prospective.config import load_campaign2_engineering_config
 from demofml.prospective.custody import (
     CollectionObjectClaim,
@@ -29,12 +30,13 @@ from demofml.prospective.qualification import (
     validate_qualification_envelope,
 )
 from demofml.prospective.records import (
+    content_id,
     read_strict_json,
     write_immutable_json,
 )
 
 PROJECT_ROOT = Path(__file__).parents[2]
-CONFIG_PATH = PROJECT_ROOT / "configs/prospective/campaign-2-engineering-v1.toml"
+CONFIG_PATH = PROJECT_ROOT / "configs/prospective/campaign-2-engineering-v2.toml"
 IMAGE_DIGEST = "sha256:" + "a" * 64
 ATTESTATION_ID = "sha256-" + "b" * 64
 ATTESTATION_SHA256 = "c" * 64
@@ -87,6 +89,7 @@ def _segment(
         object_last_modified=end,
     )
     return build_collection_segment(
+        campaign=CAMPAIGN_V2,
         sequence=sequence,
         previous_segment_id=previous,
         symbol=symbol,
@@ -119,7 +122,7 @@ def _qualification_chains() -> dict[str, list[dict[str, object]]]:
 
 
 def test_collection_chain_binds_predecessor_ranges_and_terminal() -> None:
-    start = datetime(2026, 3, 11, tzinfo=UTC)
+    start = datetime(2026, 9, 1, tzinfo=UTC)
     middle = start + timedelta(hours=1)
     end = middle + timedelta(hours=1)
     first = _segment("EURUSD", start, middle)
@@ -154,6 +157,7 @@ def test_collection_chain_binds_predecessor_ranges_and_terminal() -> None:
     chains = _qualification_chains()
     terminal = build_collection_terminal(
         chains,
+        campaign=CAMPAIGN_V2,
         recorded_at=load_campaign2_engineering_config(
             CONFIG_PATH
         ).prospective_start,
@@ -175,7 +179,28 @@ def test_collection_chain_binds_predecessor_ranges_and_terminal() -> None:
         for symbol in PAIRS
     }
     with pytest.raises(ValueError, match="reuses an object key"):
-        build_collection_terminal(reused, recorded_at=middle)
+        build_collection_terminal(
+            reused,
+            campaign=CAMPAIGN_V2,
+            recorded_at=middle,
+        )
+
+    historical_source = _segment(
+        "EURUSD",
+        datetime(2027, 3, 1, tzinfo=UTC),
+        datetime(2027, 3, 1, 1, tzinfo=UTC),
+    )
+    historical_core = {
+        **{
+            key: value
+            for key, value in historical_source.items()
+            if key != "segment_id"
+        },
+        "manifest_set": CAMPAIGN_V1.collection_manifest_set_id,
+        "campaign_id": CAMPAIGN_V1.campaign_id,
+    }
+    historical = {**historical_core, "segment_id": content_id(historical_core)}
+    validate_collection_segment(historical)
 
 
 def test_strict_records_are_immutable_and_reject_duplicate_fields(
@@ -205,21 +230,21 @@ def test_config_loader_rejects_scoring_authorization(tmp_path: Path) -> None:
         "configs/bars/prospective-quote-bars-v1.toml",
         "configs/features/cross-pair-v1.toml",
         "configs/experiments/prospective-executable-v1.toml",
-        "docs/research/campaign-2-prospective-factor-plan.md",
+        "docs/research/campaign-2-prospective-factor-v2.md",
     ):
         shutil.copyfile(PROJECT_ROOT / relative, root / relative)
     unsafe = CONFIG_PATH.read_text(encoding="utf-8").replace(
         "scoring = false", "scoring = true"
     )
-    copied = root / "configs/prospective/campaign-2-engineering-v1.toml"
+    copied = root / "configs/prospective/campaign-2-engineering-v2.toml"
     copied.write_text(unsafe, encoding="utf-8")
 
     with pytest.raises(ValueError, match="engineering-only"):
         load_campaign2_engineering_config(copied)
 
     moved_boundary = CONFIG_PATH.read_text(encoding="utf-8").replace(
-        'prospective_start = "2026-09-01T00:00:00Z"',
-        'prospective_start = "2026-09-02T00:00:00Z"',
+        'prospective_start = "2027-03-01T00:00:00Z"',
+        'prospective_start = "2027-03-02T00:00:00Z"',
     )
     copied.write_text(moved_boundary, encoding="utf-8")
     with pytest.raises(ValueError, match="differ from the protocol"):
@@ -263,7 +288,9 @@ def test_qualification_envelope_passes_checks_but_never_authorizes(
     bundle = freeze_engineering_bundle(CONFIG_PATH, bundle_root, IMAGE_DIGEST)
     chains = _qualification_chains()
     terminal = build_collection_terminal(
-        chains, recorded_at=config.prospective_start
+        chains,
+        campaign=CAMPAIGN_V2,
+        recorded_at=config.prospective_start,
     )
     boundaries = expected_decision_boundaries(
         config.qualification_start, config.prospective_start
@@ -289,7 +316,19 @@ def test_qualification_envelope_passes_checks_but_never_authorizes(
         measurements=measurements,
     )
 
-    validate_qualification_envelope(envelope)
+    trusted_ids = {
+        "expected_bundle_id": str(bundle["bundle_id"]),
+        "expected_collection_terminal_id": str(terminal["terminal_id"]),
+        "expected_opportunity_ledger_sha256": (
+            measurements.opportunity_ledger_sha256
+        ),
+    }
+    validate_qualification_envelope(envelope, **trusted_ids)
+    assert envelope["artifact_sets"] == {
+        "engineering_bundle": CAMPAIGN_V2.engineering_bundle_set_id,
+        "collection_terminal": CAMPAIGN_V2.collection_terminal_set_id,
+        "opportunity_ledger": CAMPAIGN_V2.opportunity_ledger_id,
+    }
     assert envelope["engineering_checks_passed"] is True
     assert envelope["qualification_complete"] is False
     assert envelope["external_attestation_required"] is True
@@ -317,4 +356,82 @@ def test_qualification_envelope_passes_checks_but_never_authorizes(
             coverage=contradictory,
             expected_boundaries=boundaries,
             measurements=measurements,
+        )
+
+    with pytest.raises(ValueError, match="separately trusted evidence IDs"):
+        validate_qualification_envelope(envelope)
+
+    relabeled_core = {
+        key: value
+        for key, value in envelope.items()
+        if key not in {"artifact_sets", "qualification_id"}
+    }
+    relabeled = {**relabeled_core, "qualification_id": content_id(relabeled_core)}
+    with pytest.raises(ValueError, match="fields are incompatible"):
+        validate_qualification_envelope(relabeled, **trusted_ids)
+
+    different_evidence_core = {
+        **{key: value for key, value in envelope.items() if key != "qualification_id"},
+        "bundle_id": "sha256-" + "0" * 64,
+    }
+    different_evidence = {
+        **different_evidence_core,
+        "qualification_id": content_id(different_evidence_core),
+    }
+    with pytest.raises(ValueError, match="differs from trusted IDs"):
+        validate_qualification_envelope(different_evidence, **trusted_ids)
+
+    different_calendar_core = {
+        **{key: value for key, value in envelope.items() if key != "qualification_id"},
+        "expected_calendar_sha256": "0" * 64,
+    }
+    different_calendar = {
+        **different_calendar_core,
+        "qualification_id": content_id(different_calendar_core),
+    }
+    with pytest.raises(ValueError, match="frozen calendar"):
+        validate_qualification_envelope(different_calendar, **trusted_ids)
+
+    modified_config = replace(
+        config,
+        qualification_start=config.qualification_start + timedelta(minutes=5),
+    )
+    with pytest.raises(ValueError, match="unmodified loaded config"):
+        build_qualification_envelope(
+            config=modified_config,
+            bundle_root=bundle_root,
+            expected_bundle_id=str(bundle["bundle_id"]),
+            collection_terminal=terminal,
+            collection_chains=chains,
+            coverage=coverage,
+            expected_boundaries=boundaries,
+            measurements=measurements,
+        )
+
+
+def test_v1_artifact_builders_are_closed() -> None:
+    with pytest.raises(ValueError, match="artifact creation is closed"):
+        freeze_engineering_bundle(
+            PROJECT_ROOT / "configs/prospective/campaign-2-engineering-v1.toml",
+            PROJECT_ROOT / "unused-v1-bundle",
+            IMAGE_DIGEST,
+        )
+    with pytest.raises(ValueError, match="artifact creation is closed"):
+        build_collection_terminal(
+            {},
+            campaign=CAMPAIGN_V1,
+            recorded_at=datetime(2026, 9, 1, tzinfo=UTC),
+        )
+    forged_v1 = replace(CAMPAIGN_V1, artifact_creation_open=True)
+    with pytest.raises(ValueError, match="canonical campaign spec"):
+        build_collection_terminal(
+            {},
+            campaign=forged_v1,
+            recorded_at=datetime(2026, 9, 1, tzinfo=UTC),
+        )
+    with pytest.raises(ValueError, match="outside the campaign interval"):
+        _segment(
+            "EURUSD",
+            datetime(2026, 8, 31, tzinfo=UTC),
+            datetime(2026, 8, 31, 1, tzinfo=UTC),
         )

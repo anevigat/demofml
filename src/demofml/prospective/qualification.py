@@ -14,15 +14,17 @@ from demofml.prospective.bundle import (
     ENGINEERING_BUNDLE_SCOPE,
     verify_engineering_bundle,
 )
+from demofml.prospective.campaigns import CAMPAIGN_V1, campaign_spec
 from demofml.prospective.config import (
     MAXIMUM_CONSECUTIVE_MISSING_BARS,
     MAXIMUM_FEATURE_BUILD_SECONDS_PER_BOUNDARY,
     MAXIMUM_PEAK_RSS_BYTES,
     MINIMUM_COMPLETE_RATIO,
     Campaign2EngineeringConfig,
+    load_campaign2_engineering_config,
 )
 from demofml.prospective.custody import validate_collection_terminal
-from demofml.prospective.opportunities import CAMPAIGN_ID, CoverageReport
+from demofml.prospective.opportunities import CoverageReport
 from demofml.prospective.records import (
     CONTENT_ID_PATTERN,
     SHA256_PATTERN,
@@ -31,7 +33,7 @@ from demofml.prospective.records import (
     write_immutable_json,
 )
 
-QUALIFICATION_SET_ID = "campaign-2-engineering-qualification-v1"
+QUALIFICATION_SET_ID = CAMPAIGN_V1.qualification_set_id
 QUALIFICATION_SCOPE = "engineering_prequalification_claims_no_scores_or_outcomes"
 _CHECK_OPERATORS = {
     "engineering_bundle_scope": "==",
@@ -74,6 +76,17 @@ def _check(
         "operator": operator,
         "threshold": threshold,
     }
+
+
+def _calendar_sha256(boundaries: tuple[datetime, ...]) -> str:
+    return hashlib.sha256(
+        canonical_json(
+            [
+                boundary.astimezone(UTC).isoformat().replace("+00:00", "Z")
+                for boundary in boundaries
+            ]
+        )
+    ).hexdigest()
 
 
 def _parse_utc(value: object, name: str) -> datetime:
@@ -133,8 +146,16 @@ def build_qualification_envelope(
     measurements: QualificationMeasurements,
 ) -> dict[str, object]:
     """Build qualification evidence while refusing to grant any capability."""
+    config.spec.require_artifact_creation()
+    if load_campaign2_engineering_config(config.path) != config:
+        raise ValueError("qualification requires an unmodified loaded config")
     bundle = verify_engineering_bundle(bundle_root, expected_bundle_id)
     validate_collection_terminal(collection_terminal, collection_chains)
+    if (
+        bundle.get("campaign_id") != config.spec.campaign_id
+        or collection_terminal.get("campaign_id") != config.spec.campaign_id
+    ):
+        raise ValueError("qualification evidence belongs to another campaign")
     if set(collection_chains) != set(PAIRS):
         raise ValueError("qualification requires all eight collection chains")
     expected_calendar = expected_decision_boundaries(
@@ -229,14 +250,7 @@ def build_qualification_envelope(
     collection_interval_valid = _collection_within_qualification(
         config, collection_chains
     )
-    calendar_sha256 = hashlib.sha256(
-        canonical_json(
-            [
-                boundary.astimezone(UTC).isoformat().replace("+00:00", "Z")
-                for boundary in expected_boundaries
-            ]
-        )
-    ).hexdigest()
+    calendar_sha256 = _calendar_sha256(expected_boundaries)
     checks = [
         _check(
             "engineering_bundle_scope",
@@ -329,13 +343,18 @@ def build_qualification_envelope(
     checks_passed = all(check["status"] == "pass" for check in checks)
     core: dict[str, object] = {
         "format_version": 1,
-        "qualification_set": QUALIFICATION_SET_ID,
-        "campaign_id": CAMPAIGN_ID,
+        "qualification_set": config.spec.qualification_set_id,
+        "campaign_id": config.spec.campaign_id,
         "qualification_scope": QUALIFICATION_SCOPE,
         "bundle_id": bundle["bundle_id"],
         "collection_terminal_id": collection_terminal["terminal_id"],
         "expected_calendar_sha256": calendar_sha256,
         "opportunity_ledger_sha256": measurements.opportunity_ledger_sha256,
+        "artifact_sets": {
+            "engineering_bundle": config.spec.engineering_bundle_set_id,
+            "collection_terminal": config.spec.collection_terminal_set_id,
+            "opportunity_ledger": config.spec.opportunity_ledger_id,
+        },
         "coverage": {
             "expected_sections": coverage.expected_sections,
             "complete_sections": coverage.complete_sections,
@@ -354,12 +373,27 @@ def build_qualification_envelope(
         "scoring_authorized": False,
         "evaluation_authorized": False,
     }
-    return {**core, "qualification_id": content_id(core)}
+    envelope = {**core, "qualification_id": content_id(core)}
+    validate_qualification_envelope(
+        envelope,
+        expected_bundle_id=expected_bundle_id,
+        expected_collection_terminal_id=str(collection_terminal["terminal_id"]),
+        expected_opportunity_ledger_sha256=(
+            measurements.opportunity_ledger_sha256
+        ),
+    )
+    return envelope
 
 
-def validate_qualification_envelope(envelope: Mapping[str, object]) -> None:
+def validate_qualification_envelope(
+    envelope: Mapping[str, object],
+    *,
+    expected_bundle_id: str | None = None,
+    expected_collection_terminal_id: str | None = None,
+    expected_opportunity_ledger_sha256: str | None = None,
+) -> None:
     """Validate a qualification result without converting it to authorization."""
-    expected = {
+    base_fields = {
         "format_version",
         "qualification_set",
         "campaign_id",
@@ -379,12 +413,14 @@ def validate_qualification_envelope(envelope: Mapping[str, object]) -> None:
         "evaluation_authorized",
         "qualification_id",
     }
+    campaign = campaign_spec(envelope.get("campaign_id"))
+    versioned_fields = {"artifact_sets"} if campaign is not CAMPAIGN_V1 else set()
+    expected = base_fields | versioned_fields
     if set(envelope) != expected:
         raise ValueError("qualification envelope fields are incompatible")
     if (
         envelope["format_version"] != 1
-        or envelope["qualification_set"] != QUALIFICATION_SET_ID
-        or envelope["campaign_id"] != CAMPAIGN_ID
+        or envelope["qualification_set"] != campaign.qualification_set_id
         or envelope["qualification_scope"] != QUALIFICATION_SCOPE
         or envelope["qualification_complete"] is not False
         or envelope["external_attestation_required"] is not True
@@ -402,6 +438,24 @@ def validate_qualification_envelope(envelope: Mapping[str, object]) -> None:
         value = envelope[field]
         if not isinstance(value, str) or SHA256_PATTERN.fullmatch(value) is None:
             raise ValueError(f"qualification {field} is invalid")
+    if campaign is not CAMPAIGN_V1:
+        trusted_evidence = {
+            "bundle_id": expected_bundle_id,
+            "collection_terminal_id": expected_collection_terminal_id,
+            "opportunity_ledger_sha256": expected_opportunity_ledger_sha256,
+        }
+        if any(value is None for value in trusted_evidence.values()):
+            raise ValueError(
+                "v2 qualification requires separately trusted evidence IDs"
+            )
+        if any(envelope[field] != value for field, value in trusted_evidence.items()):
+            raise ValueError("qualification evidence differs from trusted IDs")
+    if campaign is not CAMPAIGN_V1 and envelope["artifact_sets"] != {
+        "engineering_bundle": campaign.engineering_bundle_set_id,
+        "collection_terminal": campaign.collection_terminal_set_id,
+        "opportunity_ledger": campaign.opportunity_ledger_id,
+    }:
+        raise ValueError("qualification artifact sets are incompatible")
     checks = envelope["checks"]
     if not isinstance(checks, list) or len(checks) != len(_CHECK_OPERATORS):
         raise ValueError("qualification checks must match the frozen set")
@@ -426,6 +480,20 @@ def validate_qualification_envelope(envelope: Mapping[str, object]) -> None:
     }:
         raise ValueError("qualification coverage fields are incompatible")
     _validate_envelope_coverage(coverage)
+    frozen_boundaries = expected_decision_boundaries(
+        campaign.qualification_start,
+        campaign.prospective_start,
+    )
+    frozen_monthly_expected: dict[str, int] = {}
+    for boundary in frozen_boundaries:
+        month = boundary.strftime("%Y-%m")
+        frozen_monthly_expected[month] = frozen_monthly_expected.get(month, 0) + 1
+    if (
+        envelope["expected_calendar_sha256"] != _calendar_sha256(frozen_boundaries)
+        or coverage["expected_sections"] != len(frozen_boundaries)
+        or coverage["monthly_expected_sections"] != frozen_monthly_expected
+    ):
+        raise ValueError("qualification coverage differs from the frozen calendar")
     by_id = {str(check["id"]): check for check in checks}
     if (
         by_id["coverage_global"]["observed"] != coverage["complete_ratio"]
@@ -561,7 +629,19 @@ def _validate_envelope_coverage(coverage: Mapping[str, object]) -> None:
         raise ValueError("qualification monthly coverage does not reconcile")
 
 
-def publish_qualification_envelope(path: Path, envelope: Mapping[str, object]) -> None:
+def publish_qualification_envelope(
+    path: Path,
+    envelope: Mapping[str, object],
+    *,
+    expected_bundle_id: str | None = None,
+    expected_collection_terminal_id: str | None = None,
+    expected_opportunity_ledger_sha256: str | None = None,
+) -> None:
     """Publish one immutable qualification result after strict validation."""
-    validate_qualification_envelope(envelope)
+    validate_qualification_envelope(
+        envelope,
+        expected_bundle_id=expected_bundle_id,
+        expected_collection_terminal_id=expected_collection_terminal_id,
+        expected_opportunity_ledger_sha256=expected_opportunity_ledger_sha256,
+    )
     write_immutable_json(path, dict(envelope))

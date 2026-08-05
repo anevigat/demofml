@@ -3,7 +3,7 @@
 import hashlib
 import tomllib
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -19,27 +19,14 @@ from demofml.features.cross_pair import (
     CURRENCIES,
     PAIRS,
 )
-from demofml.prospective.opportunities import CAMPAIGN_ID, HORIZONS_MINUTES
+from demofml.prospective.campaigns import CampaignSpec, campaign_spec
+from demofml.prospective.opportunities import HORIZONS_MINUTES
 
 ENGINEERING_STATUS = "engineering_only"
-ENGINEERING_AUTHORIZED_ON = date(2026, 8, 4)
 MINIMUM_COMPLETE_RATIO = 0.95
 MAXIMUM_CONSECUTIVE_MISSING_BARS = 36
 MAXIMUM_FEATURE_BUILD_SECONDS_PER_BOUNDARY = 1.0
 MAXIMUM_PEAK_RSS_BYTES = 1_073_741_824
-_EXPECTED_TIMESTAMPS = {
-    "historical_fit_start": datetime(2018, 1, 1, tzinfo=UTC),
-    "historical_fit_end_exclusive": datetime(2025, 1, 1, tzinfo=UTC),
-    "forbidden_start": datetime(2025, 1, 1, tzinfo=UTC),
-    "forbidden_end_exclusive": datetime(2026, 3, 11, tzinfo=UTC),
-    "qualification_start": datetime(2026, 3, 11, tzinfo=UTC),
-    "context_start": datetime(2026, 8, 31, 18, tzinfo=UTC),
-    "prospective_start": datetime(2026, 9, 1, tzinfo=UTC),
-    "decision_end_exclusive": datetime(2027, 8, 31, 22, 55, tzinfo=UTC),
-    "prospective_end_exclusive": datetime(2027, 9, 1, tzinfo=UTC),
-}
-
-
 @dataclass(frozen=True)
 class Campaign2EngineeringConfig:
     """Validated Campaign 2 contract with every unsafe authorization disabled."""
@@ -50,6 +37,7 @@ class Campaign2EngineeringConfig:
     bar_config_path: Path
     feature_config_path: Path
     label_contract_path: Path
+    spec: CampaignSpec
     historical_fit_start: datetime
     historical_fit_end_exclusive: datetime
     forbidden_start: datetime
@@ -348,6 +336,7 @@ def load_campaign2_engineering_config(path: Path) -> Campaign2EngineeringConfig:
         },
         "Campaign 2 engineering config",
     )
+    spec = campaign_spec(values["id"])
     authorization = values["authorization"]
     if not isinstance(authorization, dict):
         raise ValueError("authorization must be a table")
@@ -374,10 +363,10 @@ def load_campaign2_engineering_config(path: Path) -> Campaign2EngineeringConfig:
     label_contract = _resolve_reference(
         root, resolved.parent, values["label_contract"], "label contract"
     )
-    if protocol != root / "docs/research/campaign-2-prospective-factor-plan.md":
+    if protocol != root / spec.protocol_relative_path:
         raise ValueError("Campaign 2 protocol reference is incompatible")
     if not protocol.read_text(encoding="utf-8").startswith(
-        "# Research Campaign 2: Prospective Cross-Pair Factors\n"
+        spec.protocol_heading
     ):
         raise ValueError("Campaign 2 protocol identity is incompatible")
     _validate_bar_contract(bar_config)
@@ -400,10 +389,10 @@ def load_campaign2_engineering_config(path: Path) -> Campaign2EngineeringConfig:
     }
     if (
         _integer(values, "format_version") != 1
-        or values["id"] != CAMPAIGN_ID
+        or values["id"] != spec.campaign_id
         or values["status"] != ENGINEERING_STATUS
         or _string(values, "engineering_authorized_on")
-        != ENGINEERING_AUTHORIZED_ON.isoformat()
+        != spec.engineering_authorized_on.isoformat()
         or values["calendar_id"] != CALENDAR_ID
         or values["timezone"] != TIMEZONE_NAME
         or values["tzdata_version"] != TZDATA_VERSION
@@ -427,14 +416,14 @@ def load_campaign2_engineering_config(path: Path) -> Campaign2EngineeringConfig:
         < timestamps["historical_fit_end_exclusive"]
         == timestamps["forbidden_start"]
         < timestamps["forbidden_end_exclusive"]
-        == timestamps["qualification_start"]
+        <= timestamps["qualification_start"]
         < timestamps["context_start"]
         < timestamps["prospective_start"]
         < timestamps["decision_end_exclusive"]
         < timestamps["prospective_end_exclusive"]
     ):
         raise ValueError("Campaign 2 temporal boundaries are incompatible")
-    if timestamps != _EXPECTED_TIMESTAMPS:
+    if timestamps != spec.timestamps:
         raise ValueError("Campaign 2 temporal boundaries differ from the protocol")
     if timestamps["context_start"] != timestamps["prospective_start"] - timedelta(
         hours=6
@@ -452,6 +441,7 @@ def load_campaign2_engineering_config(path: Path) -> Campaign2EngineeringConfig:
         bar_config,
         feature_config,
         label_contract,
+        spec,
         timestamps["historical_fit_start"],
         timestamps["historical_fit_end_exclusive"],
         timestamps["forbidden_start"],

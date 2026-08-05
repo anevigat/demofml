@@ -533,6 +533,11 @@ The data-free Campaign 2 engineering verification passed in the on-prem
 `demofml` namespace on 2026-08-04. Its immutable runtime/contract identities and
 non-authorization result are recorded in
 [`docs/research/campaign-2-engineering-verification-2026-08-04.md`](docs/research/campaign-2-engineering-verification-2026-08-04.md).
+Campaign 2 v1 qualification is now fail-closed because its frozen prospective
+receipt interval cannot reach the required coverage without pre-existing
+custodial evidence. The calculation and prohibited recovery paths are recorded
+in
+[`docs/research/campaign-2-v1-qualification-blocker-2026-08-05.md`](docs/research/campaign-2-v1-qualification-blocker-2026-08-05.md).
 
 ## License
 

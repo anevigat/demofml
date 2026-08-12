@@ -12,9 +12,6 @@ Status: terminal exploratory rejection; no promotion authorized
 - Runtime image:
   `anevigat/demofml@sha256:48451479b2234be7fc84c4a0fc00fd92966f0253fd16b13f05fa2e75a03896fd`.
 - Source revision: `0d676be7c9ab7be9b1e67ae90bc0ce4b4d3b53ef`.
-- Successful Job: `demofml-campaign2-cross-pair-screen-2020-v2`.
-- Pod: `demofml-campaign2-cross-pair-screen-2020-v2-jhlqs`.
-- Node: `[REDACTED-NODE]`.
 - Result: 1/1 complete, zero restarts.
 - Report ID:
   `sha256-02e736e0126adae26b5221c5a7366b43af853cdd1ae183bc069f55661a43fdc9`.

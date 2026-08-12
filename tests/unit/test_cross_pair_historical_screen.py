@@ -221,6 +221,32 @@ def test_historical_factor_matches_closed_form_and_resets_on_gap(
     assert np.isnan(paired["AUDUSD"].candidate[-1, -11])
 
 
+def test_historical_source_rows_outside_decision_calendar_are_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_historical_screen_config(CONFIG)
+    expected = TRAIN_TIMES
+    source_only = datetime(2018, 1, 6, 0, 0, tzinfo=UTC)
+    monkeypatch.setattr(
+        historical,
+        "expected_decision_boundaries",
+        lambda _start, _end: expected,
+    )
+    monkeypatch.setattr(
+        historical,
+        "is_expected_decision_boundary",
+        lambda value: value in expected,
+    )
+    tables = {
+        symbol: _feature_table(symbol, (*expected, source_only)) for symbol in PAIRS
+    }
+
+    paired = synchronize_historical_features(tables, config)
+
+    assert paired["AUDUSD"].decision_times == expected
+    assert paired["AUDUSD"].control.shape[0] == len(expected)
+
+
 def test_runner_scores_before_screen_labels_and_uses_identical_paired_keys(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

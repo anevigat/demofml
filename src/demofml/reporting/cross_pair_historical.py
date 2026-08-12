@@ -413,8 +413,6 @@ def _validate_selected_rows(
             raise ValueError(f"selected {symbol} row crosses the source cutoff")
         if previous is not None and value <= previous:
             raise ValueError(f"selected {symbol} keys are not strictly ordered")
-        if not is_expected_decision_boundary(value):
-            raise ValueError(f"selected {symbol} key is outside the expected calendar")
         previous = value
     return tuple(value.astimezone(UTC) for value in times)
 
@@ -455,7 +453,7 @@ def synchronize_historical_features(
         table = tables[symbol]
         if not table.schema.equals(FEATURE_SCHEMA, check_metadata=True):
             raise ValueError(f"feature schema or metadata mismatch for {symbol}")
-        times[symbol] = _validate_selected_rows(
+        source_times = _validate_selected_rows(
             table,
             symbol,
             "bar_end",
@@ -463,7 +461,7 @@ def synchronize_historical_features(
             config.source_end_exclusive,
             config,
         )
-        matrix = np.column_stack(
+        source_matrix = np.column_stack(
             [
                 np.asarray(
                     table.column(name).to_numpy(zero_copy_only=False), dtype=float
@@ -471,9 +469,18 @@ def synchronize_historical_features(
                 for name in FEATURE_COLUMNS
             ]
         )
-        if np.isinf(matrix).any():
+        if np.isinf(source_matrix).any():
             raise ValueError(f"features contain infinity for {symbol}")
-        matrices[symbol] = matrix
+        expected_indices = np.asarray(
+            [
+                index
+                for index, value in enumerate(source_times)
+                if is_expected_decision_boundary(value)
+            ],
+            dtype=np.int64,
+        )
+        times[symbol] = tuple(source_times[index] for index in expected_indices)
+        matrices[symbol] = source_matrix[expected_indices]
 
     calendar = expected_decision_boundaries(
         config.train_start, config.source_end_exclusive

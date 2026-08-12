@@ -128,6 +128,12 @@ class ValidationPlan:
             raise ValueError("validation folds cannot overlap")
         if self.max_horizon_minutes <= 0 or self.max_quote_latency_minutes < 0:
             raise ValueError("horizon must be positive and latency non-negative")
+        # This is the minimum sufficient purge, not a conservative buffer: the
+        # last training decision resolves its worst-case label exactly at
+        # validation_start (max_horizon + max_quote_latency after the
+        # decision), so anything smaller lets a training label overlap the
+        # validation window. A plan with a larger horizon must raise
+        # purge_minutes accordingly and mint a new validation_set id.
         required_purge = self.max_horizon_minutes + self.max_quote_latency_minutes
         if self.purge_minutes < required_purge:
             raise ValueError(

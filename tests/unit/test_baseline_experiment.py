@@ -23,6 +23,7 @@ from demofml.models.baseline import (
     PREDICTION_SET_V3_ID,
     BaselineConfig,
     align_research_tables,
+    compute_feature_null_diagnostics,
     load_baseline_config,
     run_walk_forward,
 )
@@ -569,7 +570,15 @@ def test_experiment_artifacts_are_published_atomically(tmp_path: Path) -> None:
     assert result.fold_count == 1
     assert result.symbol == "EURUSD"
     assert pq.read_table(output / "predictions.parquet").num_rows == 18
-    assert json.loads((output / "metrics.json").read_text())["format_version"] == 1
+    stored_metrics = json.loads((output / "metrics.json").read_text())
+    assert stored_metrics["format_version"] == 1
+    # A11: metrics.json must stay byte-for-byte what evaluate_predictions()
+    # returns — reporting/acceptance.py recomputes and compares it with exact
+    # equality, so the null-diagnostics addition below must never touch it.
+    recomputed = evaluate_predictions(pq.read_table(output / "predictions.parquet"))
+    assert stored_metrics == recomputed
+    diagnostics = json.loads((output / "feature_null_diagnostics.json").read_text())
+    assert set(diagnostics) == {fold.id for fold in _plan().folds()}
     assert not list(tmp_path.glob("*.partial"))
     with pytest.raises(RuntimeError, match="Refusing to replace"):
         run_baseline_experiment(
@@ -579,3 +588,18 @@ def test_experiment_artifacts_are_published_atomically(tmp_path: Path) -> None:
             MODEL_CONFIG,
             output,
         )
+
+
+def test_feature_null_diagnostics_reports_training_only_gap() -> None:
+    """A11: a null confined to training must not leak into the validation rate."""
+    features, labels = _tables()
+    diagnostics = compute_feature_null_diagnostics(
+        features, labels, _plan(), _config()
+    )
+
+    fold = diagnostics["wf-2022-01"]
+    assert fold["training_null_rate"]["mid_return_12"] == pytest.approx(1 / 24)
+    assert fold["validation_null_rate"]["mid_return_12"] == 0.0
+    other_features = [name for name in FEATURE_COLUMNS if name != "mid_return_12"]
+    assert all(fold["training_null_rate"][name] == 0.0 for name in other_features)
+    assert all(fold["validation_null_rate"][name] == 0.0 for name in other_features)

@@ -12,7 +12,11 @@ from pathlib import Path
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
 from demofml.evaluation.signals import evaluate_predictions
-from demofml.models.baseline import load_baseline_config, run_walk_forward
+from demofml.models.baseline import (
+    compute_feature_null_diagnostics,
+    load_baseline_config,
+    run_walk_forward,
+)
 from demofml.validation.splits import load_validation_plan
 
 
@@ -45,13 +49,16 @@ def run_baseline_experiment(
 
     plan = load_validation_plan(validation_config_path)
     config = load_baseline_config(model_config_path)
-    predictions = run_walk_forward(
-        pq.read_table(features_path),
-        pq.read_table(labels_path),
-        plan,
-        config,
-    )
+    features_table = pq.read_table(features_path)
+    labels_table = pq.read_table(labels_path)
+    predictions = run_walk_forward(features_table, labels_table, plan, config)
     report = evaluate_predictions(predictions)
+    # Diagnostic only (A11): does not affect predictions or metrics.json, and
+    # is intentionally excluded from the pipeline's fingerprinted stage
+    # outputs — see feature_null_diagnostics.json's own docstring.
+    null_diagnostics = compute_feature_null_diagnostics(
+        features_table, labels_table, plan, config
+    )
     fold_count = len(set(predictions.column("fold_id").to_pylist()))
     symbols = set(predictions.column("symbol").to_pylist())
     if len(symbols) != 1:
@@ -73,6 +80,10 @@ def run_baseline_experiment(
         )
         (partial / "metrics.json").write_text(
             json.dumps(report, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (partial / "feature_null_diagnostics.json").write_text(
+            json.dumps(null_diagnostics, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         os.rename(partial, output)

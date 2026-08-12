@@ -177,11 +177,13 @@ def test_development_acceptance_is_frozen_before_execution() -> None:
     assert config.expected_authorized_files == 14
     assert config.expected_source_rows == 1_624_981_795
     assert config.locked_test_policy == "forbidden"
+    assert config.validation_config is None
 
     calibrated = load_acceptance_config(
         PROJECT_ROOT / "configs/experiments/development-acceptance-v2.toml"
     )
     assert calibrated.id == ACCEPTANCE_SET_V2_ID
+    assert calibrated.validation_config is None
     assert calibrated.minimum_positive_folds_per_horizon == (
         config.minimum_positive_folds_per_horizon
     )

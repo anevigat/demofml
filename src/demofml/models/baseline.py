@@ -387,6 +387,52 @@ def align_research_tables(
     )
 
 
+def _feature_null_rates(
+    features: NDArray[np.float64],
+    indices: NDArray[np.int64],
+    feature_names: tuple[str, ...],
+) -> dict[str, float]:
+    if indices.size == 0:
+        return {name: 0.0 for name in feature_names}
+    window = features[indices]
+    null_rate = np.isnan(window).sum(axis=0) / float(indices.size)
+    return {
+        name: float(null_rate[position])
+        for position, name in enumerate(feature_names)
+    }
+
+
+def compute_feature_null_diagnostics(
+    features: pa.Table,
+    labels: pa.Table,
+    plan: ValidationPlan,
+    config: BaselineConfig,
+) -> dict[str, dict[str, dict[str, float]]]:
+    """Per-fold null rate for each feature column, keyed by fold id.
+
+    Diagnostic only: SimpleImputer already fills these with the training
+    median, so this does not change what any model fits or predicts. It only
+    surfaces how much of a fold's training/validation window was actually
+    observed versus imputed, so a feature with a large silently-imputed gap
+    is visible instead of hidden inside an otherwise-normal metric.
+    """
+    data = align_research_tables(features, labels, plan, config)
+    diagnostics: dict[str, dict[str, dict[str, float]]] = {}
+    for fold in plan.folds():
+        selection = select_fold_rows(data.decision_times, fold)
+        training_indices = np.asarray(selection.train, dtype=np.int64)
+        validation_indices = np.asarray(selection.validation, dtype=np.int64)
+        diagnostics[fold.id] = {
+            "training_null_rate": _feature_null_rates(
+                data.features, training_indices, config.features
+            ),
+            "validation_null_rate": _feature_null_rates(
+                data.features, validation_indices, config.features
+            ),
+        }
+    return diagnostics
+
+
 def _fit_predict(
     training_features: NDArray[np.float64],
     training_targets: NDArray[np.float64],

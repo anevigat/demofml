@@ -36,7 +36,11 @@ from demofml.models.baseline import (
     PREDICTION_SET_V3_ID,
 )
 from demofml.reporting.portfolio import portfolio_report
-from demofml.validation.splits import VALIDATION_SET_ID
+from demofml.validation.splits import (
+    VALIDATION_SET_ID,
+    ValidationPlan,
+    load_validation_plan,
+)
 
 ACCEPTANCE_SET_ID = "development-acceptance-v1"
 PIPELINE_SET_ID = "development-pipeline-v2"
@@ -58,7 +62,12 @@ _ACCEPTANCE_PROVENANCE = {
     ),
 }
 _HASH_BLOCK_SIZE = 8 * 1024 * 1024
-_LOCKED_TEST_START = "2025-01-01T00:00:00+00:00"
+# purged-walk-forward-v1's locked-test start, used only as the fallback for
+# acceptance configs that predate the optional `validation_config` field (see
+# AcceptanceConfig.validation_config) and therefore cannot derive it from a
+# real ValidationPlan. Campaign 1/2 configs rely on this fallback; do not
+# change it, since it must keep matching purged-walk-forward-v1 exactly.
+_LEGACY_LOCKED_TEST_START = datetime(2025, 1, 1, tzinfo=UTC)
 _RUN_ID_PATTERN = re.compile(r"^sha256-[0-9a-f]{64}$")
 _CODE_REFERENCE_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -92,6 +101,7 @@ class AcceptanceConfig:
     maximum_gross_leverage: float
     require_no_drawdown_halt: bool
     reconciliation_tolerance_usd: float
+    validation_config: Path | None = None
 
 
 def load_acceptance_config(path: Path) -> AcceptanceConfig:
@@ -154,9 +164,18 @@ def load_acceptance_config(path: Path) -> AcceptanceConfig:
             reconciliation_tolerance_usd=float(
                 portfolio["reconciliation_tolerance_usd"]
             ),
+            validation_config=(
+                (path.parent / str(values["validation_config"])).resolve()
+                if "validation_config" in values
+                else None
+            ),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError(f"invalid acceptance config field: {error}") from error
+    if config.validation_config is not None and not config.validation_config.is_file():
+        raise RuntimeError(
+            f"Acceptance validation config is not a file: {config.validation_config}"
+        )
     provenance = _ACCEPTANCE_PROVENANCE.get(config.id)
     if provenance is None:
         raise ValueError("acceptance id is not supported")
@@ -214,6 +233,47 @@ def load_acceptance_config(path: Path) -> AcceptanceConfig:
     ):
         raise ValueError("acceptance risk thresholds are invalid")
     return config
+
+
+def _resolved_validation_plan(config: AcceptanceConfig) -> ValidationPlan | None:
+    """Load the acceptance contract's real validation plan, if it declares one."""
+    if config.validation_config is None:
+        return None
+    return load_validation_plan(config.validation_config)
+
+
+def _locked_test_start(plan: ValidationPlan | None) -> datetime:
+    """Return the acceptance run's locked-test boundary.
+
+    Derived from the acceptance contract's own validation plan when one is
+    declared; falls back to purged-walk-forward-v1's boundary otherwise, which
+    keeps every acceptance config written before `validation_config` existed
+    behaving exactly as before.
+    """
+    if plan is None:
+        return _LEGACY_LOCKED_TEST_START
+    return plan.locked_test_start
+
+
+def _expected_fold_ids(
+    plan: ValidationPlan | None, expected_fold_count: int
+) -> set[str]:
+    """Return the fold ids the acceptance contract's validation plan requires."""
+    if plan is None:
+        return {
+            f"wf-{2022 + index // 12}-{index % 12 + 1:02d}"
+            for index in range(expected_fold_count)
+        }
+    fold_ids = {fold.id for fold in plan.folds()}
+    if len(fold_ids) != expected_fold_count:
+        raise RuntimeError(
+            "validation plan fold count does not match the acceptance contract"
+        )
+    return fold_ids
+
+
+def _locked_start_ns(locked_test_start: datetime) -> np.datetime64:
+    return np.datetime64(locked_test_start.replace(tzinfo=None), "ns")
 
 
 def _read_json(path: Path, description: str) -> dict[str, Any]:
@@ -592,9 +652,9 @@ def _model_observations(
 
 
 def _prediction_timestamps_are_safe(
-    root: Path, config: AcceptanceConfig
+    root: Path, config: AcceptanceConfig, locked_test_start: datetime
 ) -> bool:
-    locked_start = np.datetime64("2025-01-01T00:00:00", "ns")
+    locked_start = _locked_start_ns(locked_test_start)
     prediction_set = _ACCEPTANCE_PROVENANCE[config.id][3]
     for symbol in config.symbols:
         parquet = pq.ParquetFile(
@@ -626,8 +686,8 @@ def _prediction_timestamps_are_safe(
     return True
 
 
-def _portfolio_timestamps_are_safe(root: Path) -> bool:
-    locked_start = np.datetime64("2025-01-01T00:00:00", "ns")
+def _portfolio_timestamps_are_safe(root: Path, locked_test_start: datetime) -> bool:
+    locked_start = _locked_start_ns(locked_test_start)
     files = (
         (
             root / "portfolio" / "ledger.parquet",
@@ -652,7 +712,10 @@ def _portfolio_timestamps_are_safe(root: Path) -> bool:
 
 
 def _portfolio_recomputes(
-    root: Path, config: AcceptanceConfig, report: dict[str, Any]
+    root: Path,
+    config: AcceptanceConfig,
+    report: dict[str, Any],
+    locked_test_start: datetime,
 ) -> bool:
     portfolio_config = load_portfolio_config(config.portfolio_config)
     predictions = (
@@ -664,7 +727,7 @@ def _portfolio_recomputes(
     simulation = simulate_portfolio(
         predictions,
         portfolio_config,
-        datetime(2025, 1, 1, tzinfo=UTC),
+        locked_test_start,
     )
     stored_ledger = pq.read_table(root / "portfolio" / "ledger.parquet")
     stored_equity = pq.read_table(root / "portfolio" / "equity.parquet")
@@ -685,8 +748,10 @@ def _portfolio_recomputes(
     )
 
 
-def _portfolio_artifact_observations(root: Path) -> dict[str, float | bool]:
-    locked_start = np.datetime64("2025-01-01T00:00:00", "ns")
+def _portfolio_artifact_observations(
+    root: Path, locked_test_start: datetime
+) -> dict[str, float | bool]:
+    locked_start = _locked_start_ns(locked_test_start)
     ledger = pq.ParquetFile(root / "portfolio" / "ledger.parquet")
     ledger_pnl = 0.0
     maximum_risk_leverage = 0.0
@@ -853,6 +918,8 @@ def evaluate_development_run(
     """Evaluate a completed development run without reading locked-test data."""
     root = run_root.expanduser().resolve()
     config = load_acceptance_config(acceptance_config_path)
+    plan = _resolved_validation_plan(config)
+    locked_test_start = _locked_test_start(plan)
     run = _read_json(root / "run.json", "Pipeline run record")
     run_id = str(run.get("run_id", ""))
     checks: list[dict[str, object]] = []
@@ -864,7 +931,7 @@ def evaluate_development_run(
         and tuple(run.get("symbols", [])) == config.symbols
         and run.get("dataset_file_count") == config.expected_authorized_files
         and run.get("dataset_rows") == config.expected_source_rows
-        and run.get("locked_test_start") == _LOCKED_TEST_START
+        and run.get("locked_test_start") == locked_test_start.isoformat()
         and run.get("acceptance_set") == config.id
         and root.name == run_id
         and _RUN_ID_PATTERN.fullmatch(run_id) is not None
@@ -933,22 +1000,20 @@ def evaluate_development_run(
     validation = _read_json(root / "validation" / "manifest.json", "Validation")
     folds = validation.get("folds")
     fold_count = len(folds) if isinstance(folds, list) else 0
-    expected_fold_ids = {
-        f"wf-{2022 + index // 12}-{index % 12 + 1:02d}"
-        for index in range(config.expected_fold_count)
-    }
+    expected_fold_ids = _expected_fold_ids(plan, config.expected_fold_count)
     observed_fold_ids = (
         {str(fold.get("id")) for fold in folds if isinstance(fold, dict)}
         if isinstance(folds, list)
         else set()
     )
     locked_test = validation.get("locked_test")
+    expected_locked_start = locked_test_start.isoformat().replace("+00:00", "Z")
     validation_valid = (
         validation.get("id") == config.validation_set
         and validation.get("purge_minutes") == 65
         and validation.get("maximum_information_window_minutes") == 65
         and isinstance(locked_test, dict)
-        and locked_test.get("start") == "2025-01-01T00:00:00Z"
+        and locked_test.get("start") == expected_locked_start
         and fold_count == config.expected_fold_count
         and observed_fold_ids == expected_fold_ids
     )
@@ -962,7 +1027,9 @@ def evaluate_development_run(
         )
     )
 
-    prediction_timestamps_safe = _prediction_timestamps_are_safe(root, config)
+    prediction_timestamps_safe = _prediction_timestamps_are_safe(
+        root, config, locked_test_start
+    )
     if not prediction_timestamps_safe:
         raise RuntimeError("Prediction timestamps reach the locked test")
     checks.append(
@@ -1041,7 +1108,7 @@ def evaluate_development_run(
             ),
         ]
     )
-    portfolio_timestamps_safe = _portfolio_timestamps_are_safe(root)
+    portfolio_timestamps_safe = _portfolio_timestamps_are_safe(root, locked_test_start)
     if not portfolio_timestamps_safe:
         raise RuntimeError("Portfolio timestamps reach the locked test")
     portfolio = _read_json(root / "portfolio" / "metrics.json", "Portfolio metrics")
@@ -1058,8 +1125,10 @@ def evaluate_development_run(
         raise RuntimeError("Portfolio metrics contain non-finite values")
     if initial <= 0.0:
         raise RuntimeError("Portfolio initial capital must be positive")
-    artifacts = _portfolio_artifact_observations(root)
-    portfolio_recomputed = _portfolio_recomputes(root, config, portfolio)
+    artifacts = _portfolio_artifact_observations(root, locked_test_start)
+    portfolio_recomputed = _portfolio_recomputes(
+        root, config, portfolio, locked_test_start
+    )
     equity_reconciled = (
         math.isclose(
             initial,

@@ -7,7 +7,12 @@ import pytest
 
 from demofml.bars.quotes import aggregate_quote_bars
 from demofml.features.build import build_features
-from demofml.features.causal import FEATURE_SET_ID, CausalFeatureBuilder
+from demofml.features.causal import (
+    FEATURE_SCHEMA,
+    FEATURE_SET_ID,
+    CausalFeatureBuilder,
+    elapsed_seconds_log1p,
+)
 
 
 def _bars(
@@ -137,3 +142,20 @@ def test_constant_spread_has_zero_zscore_after_warmup() -> None:
     constant_spread = pa.Table.from_pylist(rows, schema=bars.schema)
     features = CausalFeatureBuilder("EURUSD").push(constant_spread)
     assert features.column("spread_zscore_72")[71].as_py() == 0.0
+
+
+def test_elapsed_seconds_log1p_compresses_weekend_gap_outliers() -> None:
+    steady_state = elapsed_seconds_log1p(300.0)
+    weekend_gap = elapsed_seconds_log1p(172_800.0)
+    assert steady_state is not None
+    assert weekend_gap is not None
+    # raw ratio is ~576x; log1p narrows it to roughly 2x.
+    assert weekend_gap / steady_state < 2.5
+    assert elapsed_seconds_log1p(None) is None
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        elapsed_seconds_log1p(-1.0)
+
+
+def test_elapsed_seconds_log1p_is_not_part_of_the_frozen_schema() -> None:
+    """A10: additive for Campaign 3, must never mutate causal-v1's contract."""
+    assert "elapsed_seconds_log1p" not in FEATURE_SCHEMA.names

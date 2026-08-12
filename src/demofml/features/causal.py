@@ -95,6 +95,25 @@ def empty_features() -> pa.Table:
     return pa.Table.from_batches([], schema=FEATURE_SCHEMA)
 
 
+def elapsed_seconds_log1p(elapsed_seconds: float | None) -> float | None:
+    """log1p-compressed elapsed time between consecutive bars.
+
+    Not part of the frozen `causal-v1`/`causal-v2` schemas — adding a column
+    to either would mutate an immutable, already-used contract. Raw
+    `elapsed_seconds` spikes to roughly 576x its steady-state 300s value across
+    a weekend gap, which can dominate a model's input scale; log1p compresses
+    that spike (log1p(300) ~= 5.7 vs. log1p(172_800) ~= 12.1, a ~2x spread
+    instead of ~576x) while still signalling that a gap occurred. This is a
+    building block for a future Campaign 3 feature-set version to add
+    alongside, not in place of, the existing `elapsed_seconds` column.
+    """
+    if elapsed_seconds is None:
+        return None
+    if elapsed_seconds < 0.0 or not math.isfinite(elapsed_seconds):
+        raise ValueError("elapsed_seconds must be finite and non-negative")
+    return math.log1p(elapsed_seconds)
+
+
 class CausalFeatureBuilder:
     """Maintain only bounded trailing state while consuming ordered bars."""
 
@@ -183,6 +202,11 @@ class CausalFeatureBuilder:
                 self._returns_12.append(return_1)
                 self._returns_72.append(return_1)
             spread_bps = spread_close / mid_close * 10_000.0
+            # spread_zscore_72 below scores the current bar against a window
+            # that already includes it (appended here, read below) — the bar
+            # is complete at decision time so this isn't a look-ahead, and the
+            # 1/72 self-inclusion effect on the window's mean/variance is
+            # negligible. Intentional, not a bug.
             self._spreads_72.append(spread_bps)
 
             seconds = (

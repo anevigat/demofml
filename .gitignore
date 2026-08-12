@@ -19,3 +19,13 @@ dist/
 /artifacts/
 /mlruns/
 /models/
+
+# Execution infrastructure (cluster/namespace/manifests/secrets/commands) is
+# operator-internal and must never be committed — see infra/README.md.
+/infra-local/
+*.kubeconfig
+kubeconfig*
+*.pem
+*.crt
+*.key
+secrets.*

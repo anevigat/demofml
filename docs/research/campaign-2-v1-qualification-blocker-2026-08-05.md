@@ -26,8 +26,8 @@ At the observation time:
 - The minimum unavoidable shortfall was 28,315 complete boundaries.
 
 The repository contains no Campaign 2 collector or collection manifest. The
-on-prem `demofml` namespace contains only the three data-free Campaign 2
-engineering-verification Jobs; it has no Campaign 2 collector Deployment,
+operator's on-prem environment contains only the three data-free Campaign 2
+engineering-verification workloads; it has no Campaign 2 collector Deployment,
 StatefulSet, DaemonSet, Job, or CronJob. This check inspected only repository and
 Kubernetes resource metadata and did not access prospective or raw data.
 

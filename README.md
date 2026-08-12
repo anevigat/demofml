@@ -82,23 +82,23 @@ checksums, then uploads the dataset under a content-addressed S3 prefix. Local
 manifests are written below the ignored `artifacts/` directory. No endpoint or
 credential is stored in the repository.
 
-Install the project and configure the private connection from Kubernetes:
+Install the project and configure the private connection to the operator's
+object storage:
 
 ```bash
 source .venv/bin/activate
 python -m pip install -e ".[dev]"
 
-mkdir -p "$HOME/.config/demofml"
-[REDACTED-COMMAND] \
-  -o go-template='{{index .data "tls.crt" | base64decode}}' \
-  > "$HOME/.config/demofml/minio-ca.crt"
-
 export AWS_ACCESS_KEY_ID="<provided by the operator>"
 export AWS_SECRET_ACCESS_KEY="<provided by the operator>"
-export AWS_CA_BUNDLE="$HOME/.config/demofml/minio-ca.crt"
+export AWS_CA_BUNDLE="<path to the operator's CA bundle, if required>"
 export S3_ENDPOINT_URL="<operator's private S3 endpoint>"
 export DEMOFML_DATA_BUCKET="demofml-data"
 ```
+
+How these values are retrieved (cluster, namespace, secret names, ingress
+hosts) is operator-specific and intentionally not documented here — it is
+never part of this repository.
 
 Inspect the manifest without connecting to S3, then publish:
 
@@ -529,8 +529,8 @@ eligible, and no real custody tenant, attestation, or preflight exists. The
 existing locked test remains excluded; fitting, collection, scoring, evaluation,
 and every Campaign 2 performance run remain unauthorized.
 
-The data-free Campaign 2 engineering verification passed in the on-prem
-`demofml` namespace on 2026-08-04. Its immutable runtime/contract identities and
+The data-free Campaign 2 engineering verification passed in the operator's
+on-prem environment on 2026-08-04. Its immutable runtime/contract identities and
 non-authorization result are recorded in
 [`docs/research/campaign-2-engineering-verification-2026-08-04.md`](docs/research/campaign-2-engineering-verification-2026-08-04.md).
 Campaign 2 v1 qualification is now fail-closed because its frozen prospective

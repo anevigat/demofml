@@ -10,8 +10,8 @@ research workflow. The custodian controls storage administration, credentials,
 policy archives, signing material, trusted time, and terminal claim storage.
 Researchers receive no raw-data or storage-administration identity.
 
-The current shared MinIO service in the `demofml` namespace is development
-infrastructure, not a Campaign 2 custody boundary. It has one replica, one local
+The current shared MinIO service in the operator's on-prem environment is
+development infrastructure, not a Campaign 2 custody boundary. It has one replica, one local
 PVC, shared static application credentials with broad `s3:*` access, and no
 configured Object Lock, versioning, retention, independent administration, or
 custodial signature. It must not hold Campaign 2 qualification or holdout data.

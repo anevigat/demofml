@@ -4,21 +4,18 @@ Status: technical verification passed; no research or data capability authorized
 
 Run date: 2026-08-04
 
-## Kubernetes Execution v1
+## Operator Execution v1
 
-- Context: `[REDACTED-CONTEXT]`.
-- Namespace: `demofml`.
-- Job: `demofml-campaign2-engineering-verify-v1`.
-- Pod: `demofml-campaign2-engineering-verify-v1-6gnmr`.
-- Node: `[REDACTED-NODE]`.
 - Start: `2026-08-04T10:17:46Z`.
 - Completion: `2026-08-04T10:17:55Z`.
 - Result: `Complete`, one succeeded pod, zero restarts, `backoffLimit: 0`.
 
-The Job mounted no Secret, ServiceAccount token, data PVC, MinIO config, MLflow
-config, or external custody credential. A dedicated deny-all NetworkPolicy
-selected the Job pod. The base image and offline overlay were immutable and
-digest-bound.
+The workload mounted no Secret, ServiceAccount token, data PVC, MinIO config,
+MLflow config, or external custody credential. A dedicated deny-all
+NetworkPolicy selected the workload's pod. The base image and offline overlay
+were immutable and digest-bound. Execution environment details (cluster,
+namespace, job/pod/node identifiers) are operator-internal and intentionally
+not recorded here.
 
 ## Identities
 
@@ -30,11 +27,6 @@ digest-bound.
   `sha256:42af2130e90b9434d5f7daec80a8343db911be02d1c86e0113447c4ccd9ad378`.
 - Verification:
   `sha256-17ac3ff8eda074f5c5a897e1f40ea38b1dd1b394111a65c7c8d3147de6123028`.
-
-The immutable ConfigMaps were:
-
-- `demofml-campaign2-wheels-abccb11397f9`.
-- `demofml-campaign2-contracts-42af2130e90b`.
 
 ## Checks
 
@@ -61,21 +53,18 @@ provenance generation, and multi-platform publication.
 - Source revision: `f6ae9a59798b4aa12c93a0b98c170c1e93662457`.
 - Runtime image:
   `anevigat/demofml@sha256:461660d383b7af4f621d139185b6fb48249b8c73c41e166df7f992e44263fcf5`.
-- Job: `demofml-campaign2-engineering-verify-v2`.
-- Pod: `demofml-campaign2-engineering-verify-v2-ct986`.
-- Node: `[REDACTED-NODE]`.
 - Start: `2026-08-04T10:57:22Z`.
 - Completion: `2026-08-04T10:58:06Z`.
 - Result: `Complete`, one succeeded pod, zero restarts, `backoffLimit: 0`.
 - Verification:
   `sha256-e028d74b57003ea41f24fcac85728c75543ac115de57856e7fdc5ed1e43ac8ab`.
 
-The v2 Job used the contracts and application installed in the immutable
+The v2 workload used the contracts and application installed in the immutable
 runtime image. It had no init container, runtime overlay, Secret, ConfigMap,
 ServiceAccount token, data PVC, MinIO config, MLflow config, or external custody
 credential.
-Its only volume was an ephemeral `/tmp` `emptyDir`; the deny-all NetworkPolicy
-continued to select the pod. All five engineering checks and all authorization
+Its only volume was an ephemeral `/tmp` `emptyDir`; a deny-all NetworkPolicy
+continued to select its pod. All five engineering checks and all authorization
 denials matched v1.
 
 ## On-Prem Custody Verification v3
@@ -88,9 +77,6 @@ provenance generation, and multi-platform publication.
 - Source revision: `c161ebe44341b178bdd25271bd6160eef2bd45e9`.
 - Runtime image:
   `anevigat/demofml@sha256:c86baaebef31cf0c696bb6bf570a97eb1a555fdc823cdb45b794e47047298d0e`.
-- Job: `demofml-campaign2-engineering-verify-v3`.
-- Pod: `demofml-campaign2-engineering-verify-v3-dczxh`.
-- Node: `[REDACTED-NODE]`.
 - Start: `2026-08-04T12:38:49Z`.
 - Completion: `2026-08-04T12:39:34Z`.
 - Result: `Complete`, one succeeded pod, zero restarts, `backoffLimit: 0`.
@@ -100,10 +86,10 @@ provenance generation, and multi-platform publication.
   `sha256-3e86db4f30021a0fe6011d0d5e28616de45a6526fc19bcdab01f1def630455ef`.
 
 V3 binds Campaign 2 to on-prem custody requirements and contains no AWS custody
-module or cloud-provider preflight contract. The Job mounted no Secret,
+module or cloud-provider preflight contract. The workload mounted no Secret,
 ConfigMap, ServiceAccount token, data PVC, MinIO configuration, MLflow
 configuration, or external custody credential. Its only volume was an
-ephemeral `/tmp` `emptyDir`, and the deny-all NetworkPolicy selected the pod.
+ephemeral `/tmp` `emptyDir`, and a deny-all NetworkPolicy selected its pod.
 All five engineering checks passed while collection, fitting, scoring,
 evaluation, raw access, and qualification completion remained false.
 

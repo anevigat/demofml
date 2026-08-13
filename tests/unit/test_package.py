@@ -35,6 +35,19 @@ def test_cli_delegates_acceptance_arguments(monkeypatch: pytest.MonkeyPatch) -> 
     assert received == [["--run-root", "/work/run"]]
 
 
+def test_cli_delegates_sealed_envelope_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: list[list[str] | None] = []
+    monkeypatch.setattr(
+        "demofml.research.envelope.main", lambda argv: received.append(argv)
+    )
+
+    main(["verify-sealed-envelope", "--envelope", "/work/envelope.toml"])
+
+    assert received == [["--envelope", "/work/envelope.toml"]]
+
+
 @pytest.mark.parametrize(
     ("command", "target"),
     [

@@ -36,6 +36,11 @@ from demofml.models.baseline import (
     PREDICTION_SET_V3_ID,
 )
 from demofml.reporting.portfolio import portfolio_report
+from demofml.research.envelope import (
+    SealedEnvelope,
+    load_sealed_envelope,
+    verify_sealed_envelope,
+)
 from demofml.validation.splits import (
     VALIDATION_SET_ID,
     ValidationPlan,
@@ -102,6 +107,7 @@ class AcceptanceConfig:
     require_no_drawdown_halt: bool
     reconciliation_tolerance_usd: float
     validation_config: Path | None = None
+    sealed_envelope: Path | None = None
 
 
 def load_acceptance_config(path: Path) -> AcceptanceConfig:
@@ -169,12 +175,21 @@ def load_acceptance_config(path: Path) -> AcceptanceConfig:
                 if "validation_config" in values
                 else None
             ),
+            sealed_envelope=(
+                (path.parent / str(values["sealed_envelope"])).resolve()
+                if "sealed_envelope" in values
+                else None
+            ),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError(f"invalid acceptance config field: {error}") from error
     if config.validation_config is not None and not config.validation_config.is_file():
         raise RuntimeError(
             f"Acceptance validation config is not a file: {config.validation_config}"
+        )
+    if config.sealed_envelope is not None and not config.sealed_envelope.is_file():
+        raise RuntimeError(
+            f"Acceptance sealed envelope is not a file: {config.sealed_envelope}"
         )
     provenance = _ACCEPTANCE_PROVENANCE.get(config.id)
     if provenance is None:
@@ -240,6 +255,31 @@ def _resolved_validation_plan(config: AcceptanceConfig) -> ValidationPlan | None
     if config.validation_config is None:
         return None
     return load_validation_plan(config.validation_config)
+
+
+def _verified_sealed_envelope(
+    config: AcceptanceConfig, acceptance_config_path: Path
+) -> SealedEnvelope | None:
+    """Verify the seal pre-registered over this run's four sealed documents.
+
+    A broken seal raises instead of emitting a failed check: it means the
+    contract being evaluated is not the contract that was committed before the
+    first fold ran, so neither a pass nor a fail from this gate would carry the
+    meaning the acceptance report claims for it. Acceptance configs that
+    declare no envelope (every Campaign 1/2 contract) are unaffected.
+    """
+    if config.sealed_envelope is None:
+        return None
+    envelope = load_sealed_envelope(config.sealed_envelope)
+    verify_sealed_envelope(envelope)
+    resolved = acceptance_config_path.expanduser().resolve()
+    sealed_acceptance = envelope.resolved_path("acceptance")
+    if resolved != sealed_acceptance:
+        raise RuntimeError(
+            f"Acceptance contract is not the sealed one: {resolved} "
+            f"was sealed as {sealed_acceptance}"
+        )
+    return envelope
 
 
 def _locked_test_start(plan: ValidationPlan | None) -> datetime:
@@ -918,6 +958,7 @@ def evaluate_development_run(
     """Evaluate a completed development run without reading locked-test data."""
     root = run_root.expanduser().resolve()
     config = load_acceptance_config(acceptance_config_path)
+    envelope = _verified_sealed_envelope(config, acceptance_config_path)
     plan = _resolved_validation_plan(config)
     locked_test_start = _locked_test_start(plan)
     run = _read_json(root / "run.json", "Pipeline run record")
@@ -1290,7 +1331,7 @@ def evaluate_development_run(
 
     counts = Counter(str(check["status"]) for check in checks)
     accepted = counts["fail"] == 0 and counts["blocked"] == 0
-    return {
+    report: dict[str, Any] = {
         "format_version": 1,
         "acceptance_set": config.id,
         "development_only": True,
@@ -1306,6 +1347,19 @@ def evaluate_development_run(
             "accepted": accepted,
         },
     }
+    if envelope is not None and config.sealed_envelope is not None:
+        # Only present for contracts that pre-registered a seal, so acceptance
+        # reports for Campaign 1/2 runs keep exactly the shape they had.
+        report["sealed_envelope"] = {
+            "id": envelope.id,
+            "campaign": envelope.campaign,
+            "sealed_at": envelope.sealed_at.isoformat(),
+            "sha256": _sha256(config.sealed_envelope),
+            "documents": {
+                document.role: document.sha256 for document in envelope.documents
+            },
+        }
+    return report
 
 
 def publish_acceptance_report(

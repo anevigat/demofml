@@ -31,7 +31,6 @@ The final microstructure run is the authoritative terminal artifact:
 | Pipeline | `microstructure-screen-pipeline-v1` |
 | Pipeline run | `sha256-76ca5d4051004414428fe4aff5a2a614a37cdfaca1106a971aa736118702d325` |
 | Runtime digest | `sha256:a24cd0b03331eb743c00c077a292d8cc40553f9b0732949224eb5876c3201f9d` |
-| Kubernetes Job | `demofml-microstructure-screen-2021-v1` |
 | MLflow run | `be457c25d5d24ff988b840ae88978491` |
 | Technical result | 43/43 stages, exit code 0, no restart |
 | Acceptance | `accepted=false`, `promotion_authorized=false` |
@@ -72,11 +71,12 @@ substitute for an independent custodial attestation.
 
 ## Operational Retention
 
-- Retain the final acceptance envelope, stage markers, MLflow run, Kubernetes
-  Job record, and content-addressed inputs.
-- Retain the work PVC until the terminal artifacts have been backed up.
-- The completed Job may expire under its TTL; deleting it does not authorize a
-  rerun.
+- Retain the final acceptance envelope, stage markers, MLflow run, execution
+  record, and content-addressed inputs.
+- Retain the run's working storage until the terminal artifacts have been
+  backed up.
+- The execution record may expire under the operator's retention policy;
+  deleting it does not authorize a rerun.
 - Any reproduction must use the same run identity and verified checkpoints and
   is an engineering audit, not another scientific attempt.
 

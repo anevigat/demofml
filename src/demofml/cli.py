@@ -38,6 +38,11 @@ def main(argv: Sequence[str] | None = None) -> None:
 
         verify_campaign2(values[1:])
         return
+    if values and values[0] == "verify-sealed-envelope":
+        from demofml.research.envelope import main as verify_envelope
+
+        verify_envelope(values[1:])
+        return
     if values and values[0] == "run-cross-pair-historical-screen":
         from demofml.reporting.cross_pair_historical import main as run_screen
 
@@ -57,6 +62,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "run-cross-pair-historical-screen",
             "smoke-infra",
             "verify-campaign2-engineering",
+            "verify-sealed-envelope",
         ],
     )
     arguments, remaining = parser.parse_known_args(values)

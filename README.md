@@ -393,6 +393,31 @@ demofml evaluate-development \
   --acceptance-config configs/experiments/development-acceptance-v1.toml
 ```
 
+## Campaign 3 Protocol: Sealed Envelopes
+
+`docs/research/campaign-3-protocol-v1.md` binds every Campaign 3 variant. Before
+a variant's first fold is run, four documents are committed together — the
+hypothesis, the validation contract, the model contract including its complete
+hyperparameter search space, and the acceptance contract including every
+pre-registered threshold — and their SHA-256 digests are recorded in a
+`sealed-envelope-v1` TOML committed in the same change.
+
+The seal is what makes "this was decided in advance" checkable rather than
+merely asserted: it proves the four documents the acceptance gate evaluated are
+byte-identical to the four that were committed before any result was observed.
+Verify one on demand:
+
+```bash
+demofml verify-sealed-envelope \
+  --envelope configs/experiments/campaign-3-<variant>-envelope-v1.toml
+```
+
+An acceptance contract that declares `sealed_envelope` is verified
+automatically by the development gate, which refuses to evaluate a run whose
+seal is broken or whose acceptance contract is not the sealed one. Contracts
+that declare no envelope — every Campaign 1 and Campaign 2 contract — behave
+exactly as before.
+
 ## Next Research Phase: Tick Microstructure Features
 
 The next hypothesis adds information discarded by `quote-bars-v1`, rather than

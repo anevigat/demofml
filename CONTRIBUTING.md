@@ -31,7 +31,8 @@ for module in \
     src/demofml/models/frozen.py \
     src/demofml/models/locked.py \
     src/demofml/evaluation/signals.py \
-  src/demofml/evaluation/portfolio.py; do
+  src/demofml/evaluation/portfolio.py \
+  src/demofml/research/envelope.py; do
   coverage report --include="$module" --fail-under=90
 done
 ```

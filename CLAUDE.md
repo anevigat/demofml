@@ -93,6 +93,11 @@ whether the change requires a new version ID rather than an in-place edit.
 - `prospective/` — Campaign 2: outcome-free schemas, cross-pair factors,
   custody boundary, prequalification/qualification gates for a prospective
   (not yet collected) holdout period.
+- `research/` — process contracts constraining how runs may be conducted.
+  `envelope.py` implements the Campaign 3 sealed envelope (`sealed-envelope-v1`):
+  four pre-registered documents (hypothesis, validation, model, acceptance)
+  frozen by SHA-256 before a variant's first fold. See
+  `docs/research/campaign-3-protocol-v1.md`.
 - `calendars/` — trading-calendar / session logic used by prospective factors.
 - `infrastructure.py`, `cli.py` — Kubernetes/MLflow/S3 smoke checks and the
   `demofml` CLI dispatcher (see `cli.py` for the subcommand list: each

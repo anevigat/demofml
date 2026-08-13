@@ -27,6 +27,12 @@ from demofml.models.baseline import (
     PREDICTION_SET_V4_ID,
     load_baseline_config,
 )
+from demofml.models.gbm import (
+    GBM_MODEL_SET_ID,
+    GBM_PREDICTION_SET_ID,
+    load_gbm_config,
+)
+from demofml.orchestration.development import load_pipeline_config
 from demofml.orchestration.locked import (
     LOCKED_TEST_SET_ID,
     ONE_SHOT_POLICY,
@@ -37,7 +43,9 @@ from demofml.reporting.acceptance import (
     ACCEPTANCE_SET_V2_ID,
     load_acceptance_config,
 )
+from demofml.research.envelope import load_sealed_envelope, verify_sealed_envelope
 from demofml.validation.splits import (
+    CAMPAIGN_3_VALIDATION_SET_ID,
     INTERVAL_SEMANTICS,
     SCREEN_VALIDATION_SET_ID,
     VALIDATION_SET_ID,
@@ -209,3 +217,72 @@ def test_locked_test_protocol_is_frozen_before_candidate_selection() -> None:
     assert config.symbols == PORTFOLIO_SYMBOLS
     assert config.horizons_minutes == PORTFOLIO_HORIZONS
     assert config.feature_context_bars == 73
+
+
+def test_campaign_3_contracts_are_sealed_and_mutually_consistent() -> None:
+    """Every Stage A contract must agree before the first fold is ever run."""
+    configs = PROJECT_ROOT / "configs/experiments"
+    plan = load_validation_plan(configs / "campaign-3-walk-forward-v1.toml")
+    model = load_gbm_config(configs / "campaign-3-lightgbm-causal-v2-model-v1.toml")
+    portfolio = load_portfolio_config(configs / "portfolio-v4.toml")
+    acceptance = load_acceptance_config(
+        configs / "campaign-3-lightgbm-causal-v2-acceptance-v1.toml"
+    )
+    pipeline = load_pipeline_config(
+        configs / "campaign-3-lightgbm-causal-v2-pipeline-v1.toml"
+    )
+
+    assert plan.id == CAMPAIGN_3_VALIDATION_SET_ID
+    assert plan.feature_set == FEATURE_SET_V2_ID
+    assert plan.label_set == LABEL_SET_V2_ID
+    assert plan.purge_minutes == (
+        max(DEFAULT_HORIZONS_MINUTES) + MAX_QUOTE_LATENCY_MINUTES
+    )
+    assert len(plan.folds()) == acceptance.expected_fold_count == 36
+    assert plan.folds()[0].id == "wf-2022-01"
+    assert plan.folds()[-1].id == "wf-2024-12"
+
+    assert model.id == GBM_MODEL_SET_ID
+    assert model.validation_set == plan.id
+    assert model.features == FEATURE_V2_COLUMNS
+    assert model.horizons_minutes == DEFAULT_HORIZONS_MINUTES
+    assert len(model.candidates) == 3
+    assert model.prediction_set == GBM_PREDICTION_SET_ID
+
+    assert portfolio.model_set == model.id
+    assert portfolio.prediction_set == model.prediction_set
+    assert portfolio.validation_set == plan.id
+
+    assert acceptance.model_set == model.id
+    assert acceptance.portfolio_set == portfolio.id
+    assert acceptance.pipeline_set == pipeline.id
+    assert acceptance.locked_test_policy == "forbidden"
+
+    # Identical bar to Campaign 1's ridge lines, so a pass is comparable to
+    # their failure rather than to a moved threshold.
+    campaign_1 = load_acceptance_config(
+        configs / "development-acceptance-v2.toml"
+    )
+    assert acceptance.minimum_positive_folds_per_horizon == (
+        campaign_1.minimum_positive_folds_per_horizon
+    )
+    assert acceptance.minimum_positive_symbols_per_horizon == (
+        campaign_1.minimum_positive_symbols_per_horizon
+    )
+    assert acceptance.minimum_mean_executable_return_bps_exclusive == (
+        campaign_1.minimum_mean_executable_return_bps_exclusive
+    )
+    assert acceptance.maximum_drawdown_exclusive == (
+        campaign_1.maximum_drawdown_exclusive
+    )
+
+    # The seal itself: all four documents intact, and this contract is one.
+    assert acceptance.sealed_envelope is not None
+    envelope = load_sealed_envelope(acceptance.sealed_envelope)
+    verify_sealed_envelope(envelope)
+    assert envelope.resolved_path("acceptance") == (
+        configs / "campaign-3-lightgbm-causal-v2-acceptance-v1.toml"
+    )
+    assert envelope.resolved_path("model") == (
+        configs / "campaign-3-lightgbm-causal-v2-model-v1.toml"
+    )

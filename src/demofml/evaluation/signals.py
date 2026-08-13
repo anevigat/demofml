@@ -15,6 +15,7 @@ from demofml.models.baseline import (
     PREDICTION_SET_V3_ID,
     PREDICTION_SET_V4_ID,
 )
+from demofml.models.gbm import GBM_PREDICTION_SET_ID
 from demofml.models.locked import LOCKED_PREDICTION_SET_ID
 
 EVALUATION_SET_ID = "executable-signal-metrics-v1"
@@ -80,6 +81,7 @@ def evaluate_predictions(predictions: pa.Table) -> dict[str, Any]:
         PREDICTION_SET_ID,
         PREDICTION_SET_V3_ID,
         PREDICTION_SET_V4_ID,
+        GBM_PREDICTION_SET_ID,
     }:
         raise ValueError("prediction metadata is not a development prediction set")
     if predictions.num_rows == 0:

@@ -23,11 +23,17 @@ from demofml.models.baseline import (
     PREDICTION_SET_V3_ID,
     PREDICTION_SET_V4_ID,
 )
-from demofml.validation.splits import SCREEN_VALIDATION_SET_ID, VALIDATION_SET_ID
+from demofml.models.gbm import GBM_MODEL_SET_ID, GBM_PREDICTION_SET_ID
+from demofml.validation.splits import (
+    CAMPAIGN_3_VALIDATION_SET_ID,
+    SCREEN_VALIDATION_SET_ID,
+    VALIDATION_SET_ID,
+)
 
 PORTFOLIO_SET_ID = "normalized-sleeve-portfolio-v1"
 PORTFOLIO_SET_V2_ID = "normalized-sleeve-portfolio-v2"
 PORTFOLIO_SET_V3_ID = "normalized-sleeve-portfolio-v3"
+PORTFOLIO_SET_V4_ID = "normalized-sleeve-portfolio-v4"
 _PORTFOLIO_PROVENANCE = {
     PORTFOLIO_SET_ID: (PREDICTION_SET_ID, MODEL_SET_ID, VALIDATION_SET_ID),
     PORTFOLIO_SET_V2_ID: (
@@ -39,6 +45,11 @@ _PORTFOLIO_PROVENANCE = {
         PREDICTION_SET_V4_ID,
         MODEL_SET_V3_ID,
         SCREEN_VALIDATION_SET_ID,
+    ),
+    PORTFOLIO_SET_V4_ID: (
+        GBM_PREDICTION_SET_ID,
+        GBM_MODEL_SET_ID,
+        CAMPAIGN_3_VALIDATION_SET_ID,
     ),
 }
 PORTFOLIO_SYMBOLS = (

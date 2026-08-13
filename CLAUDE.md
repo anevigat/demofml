@@ -79,8 +79,10 @@ whether the change requires a new version ID rather than an in-place edit.
 - `validation/` — purged walk-forward temporal splitting (`splits.py`); folds
   reject randomness, overlap, and non-UTC timestamps, and enforce the
   65-minute train/validation purge (max horizon + quote latency).
-- `models/` — `baseline.py` (per-symbol/fold/horizon ridge), `frozen.py`
-  (candidate freeze), `locked.py` (one-shot locked-test evaluation).
+- `models/` — `baseline.py` (per-symbol/fold/horizon ridge, frozen for
+  Campaign 1/2 reproducibility), `gbm.py`/`gbm_build.py` (Campaign 3 LightGBM
+  line; reuses `baseline.py`'s alignment and action rule but never mutates it),
+  `frozen.py` (candidate freeze), `locked.py` (one-shot locked-test evaluation).
 - `evaluation/` — `signals.py` (per-fold/horizon metrics), `portfolio.py`
   (cost-aware, vol-targeted, drawdown-halting portfolio accounting).
 - `orchestration/` — `development.py` is the resumable multi-stage DAG runner

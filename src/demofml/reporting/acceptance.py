@@ -24,6 +24,7 @@ from demofml.evaluation.portfolio import (
     PORTFOLIO_HORIZONS,
     PORTFOLIO_SET_ID,
     PORTFOLIO_SET_V2_ID,
+    PORTFOLIO_SET_V4_ID,
     PORTFOLIO_SYMBOLS,
     load_portfolio_config,
     simulate_portfolio,
@@ -35,6 +36,7 @@ from demofml.models.baseline import (
     PREDICTION_SET_ID,
     PREDICTION_SET_V3_ID,
 )
+from demofml.models.gbm import GBM_MODEL_SET_ID, GBM_PREDICTION_SET_ID
 from demofml.reporting.portfolio import portfolio_report
 from demofml.research.envelope import (
     SealedEnvelope,
@@ -42,6 +44,7 @@ from demofml.research.envelope import (
     verify_sealed_envelope,
 )
 from demofml.validation.splits import (
+    CAMPAIGN_3_VALIDATION_SET_ID,
     VALIDATION_SET_ID,
     ValidationPlan,
     load_validation_plan,
@@ -51,6 +54,8 @@ ACCEPTANCE_SET_ID = "development-acceptance-v1"
 PIPELINE_SET_ID = "development-pipeline-v2"
 ACCEPTANCE_SET_V2_ID = "development-acceptance-v2"
 PIPELINE_SET_V3_ID = "development-pipeline-v3"
+ACCEPTANCE_SET_V3_ID = "campaign-3-lightgbm-causal-v2-acceptance-v1"
+PIPELINE_SET_V4_ID = "campaign-3-lightgbm-causal-v2-pipeline-v1"
 DATASET_SET_ID = "cleaned-ticks-development-v1"
 _ACCEPTANCE_PROVENANCE = {
     ACCEPTANCE_SET_ID: (
@@ -65,6 +70,29 @@ _ACCEPTANCE_PROVENANCE = {
         PORTFOLIO_SET_V2_ID,
         PREDICTION_SET_V3_ID,
     ),
+    ACCEPTANCE_SET_V3_ID: (
+        PIPELINE_SET_V4_ID,
+        GBM_MODEL_SET_ID,
+        PORTFOLIO_SET_V4_ID,
+        GBM_PREDICTION_SET_ID,
+    ),
+}
+# Campaign 1/2 all ran on purged-walk-forward-v1; Campaign 3 runs the same
+# folds over causal-v2 under its own validation id, so the expected validation
+# contract is now per-acceptance rather than a single constant.
+_ACCEPTANCE_VALIDATION_SETS = {
+    ACCEPTANCE_SET_ID: VALIDATION_SET_ID,
+    ACCEPTANCE_SET_V2_ID: VALIDATION_SET_ID,
+    ACCEPTANCE_SET_V3_ID: CAMPAIGN_3_VALIDATION_SET_ID,
+}
+# The run directory and stage name holding a run's predictions. Campaign 1/2
+# runs on disk use "baseline" and must keep replaying unchanged; Campaign 3
+# uses "model", because a directory named "baseline" holding gradient-boosting
+# output would misdescribe every artifact inside it.
+_ACCEPTANCE_MODEL_STAGES = {
+    ACCEPTANCE_SET_ID: "baseline",
+    ACCEPTANCE_SET_V2_ID: "baseline",
+    ACCEPTANCE_SET_V3_ID: "model",
 }
 _HASH_BLOCK_SIZE = 8 * 1024 * 1024
 # purged-walk-forward-v1's locked-test start, used only as the fallback for
@@ -195,10 +223,11 @@ def load_acceptance_config(path: Path) -> AcceptanceConfig:
     if provenance is None:
         raise ValueError("acceptance id is not supported")
     pipeline_set, model_set, portfolio_set, _ = provenance
+    expected_validation_set = _ACCEPTANCE_VALIDATION_SETS[config.id]
     if (
         config.pipeline_set != pipeline_set
         or config.dataset_set != DATASET_SET_ID
-        or config.validation_set != VALIDATION_SET_ID
+        or config.validation_set != expected_validation_set
         or config.model_set != model_set
         or config.portfolio_set != portfolio_set
     ):
@@ -336,8 +365,15 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _model_artifact(
+    root: Path, symbol: str, config: AcceptanceConfig, name: str
+) -> Path:
+    """Return one symbol's model-stage artifact for this acceptance contract."""
+    return root / "symbols" / symbol / _ACCEPTANCE_MODEL_STAGES[config.id] / name
+
+
 def _stage_specs(
-    root: Path, symbols: Sequence[str]
+    root: Path, symbols: Sequence[str], model_stage: str = "baseline"
 ) -> list[tuple[str, str | None, Path, list[Path]]]:
     specs: list[tuple[str, str | None, Path, list[Path]]] = [
         (
@@ -379,12 +415,12 @@ def _stage_specs(
                     ],
                 ),
                 (
-                    "baseline",
+                    model_stage,
                     symbol,
-                    symbol_root / "baseline.stage.json",
+                    symbol_root / f"{model_stage}.stage.json",
                     [
-                        symbol_root / "baseline" / "predictions.parquet",
-                        symbol_root / "baseline" / "metrics.json",
+                        symbol_root / model_stage / "predictions.parquet",
+                        symbol_root / model_stage / "metrics.json",
                     ],
                 ),
             ]
@@ -405,8 +441,10 @@ def _stage_specs(
     return specs
 
 
-def _verify_stages(root: Path, run_id: str, symbols: Sequence[str]) -> int:
-    specs = _stage_specs(root, symbols)
+def _verify_stages(
+    root: Path, run_id: str, symbols: Sequence[str], model_stage: str
+) -> int:
+    specs = _stage_specs(root, symbols, model_stage)
     for stage, symbol, marker, outputs in specs:
         record = _read_json(marker, "Stage marker")
         expected_fingerprint = hashlib.sha256(
@@ -437,7 +475,9 @@ def _valid_execution_stages(
 ) -> bool:
     if not isinstance(rows, list) or len(rows) != config.expected_stage_count:
         return False
-    expected_specs = _stage_specs(Path("/run"), config.symbols)
+    expected_specs = _stage_specs(
+        Path("/run"), config.symbols, _ACCEPTANCE_MODEL_STAGES[config.id]
+    )
     expected_outputs = {
         (stage, symbol): {
             output.relative_to("/run").as_posix() for output in outputs
@@ -565,14 +605,14 @@ def _model_observations(
     expected_horizons = set(config.horizons_minutes)
     for symbol in config.symbols:
         predictions = pq.read_table(
-            root / "symbols" / symbol / "baseline" / "predictions.parquet"
+            _model_artifact(root, symbol, config, "predictions.parquet")
         )
         symbols = set(predictions.column("symbol").to_pylist())
         if symbols != {symbol}:
             raise RuntimeError("Prediction symbol differs from its run directory")
         recomputed = evaluate_predictions(predictions)
         report = _read_json(
-            root / "symbols" / symbol / "baseline" / "metrics.json",
+            _model_artifact(root, symbol, config, "metrics.json"),
             "Baseline metrics",
         )
         if report != recomputed:
@@ -698,7 +738,7 @@ def _prediction_timestamps_are_safe(
     prediction_set = _ACCEPTANCE_PROVENANCE[config.id][3]
     for symbol in config.symbols:
         parquet = pq.ParquetFile(
-            root / "symbols" / symbol / "baseline" / "predictions.parquet"
+            _model_artifact(root, symbol, config, "predictions.parquet")
         )
         metadata = parquet.schema_arrow.metadata or {}
         if (
@@ -760,7 +800,7 @@ def _portfolio_recomputes(
     portfolio_config = load_portfolio_config(config.portfolio_config)
     predictions = (
         pq.read_table(
-            root / "symbols" / symbol / "baseline" / "predictions.parquet"
+            _model_artifact(root, symbol, config, "predictions.parquet")
         )
         for symbol in config.symbols
     )
@@ -992,7 +1032,9 @@ def evaluate_development_run(
     )
 
     try:
-        stage_count = _verify_stages(root, run_id, config.symbols)
+        stage_count = _verify_stages(
+            root, run_id, config.symbols, _ACCEPTANCE_MODEL_STAGES[config.id]
+        )
         stage_verified = stage_count == config.expected_stage_count
     except (OSError, RuntimeError, ValueError):
         stage_count = 0

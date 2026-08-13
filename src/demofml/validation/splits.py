@@ -12,8 +12,12 @@ import pyarrow as pa  # type: ignore[import-untyped]
 
 VALIDATION_SET_ID = "purged-walk-forward-v1"
 SCREEN_VALIDATION_SET_ID = "causal-v2-screen-2021-v1"
+# Campaign 3 needs purged-walk-forward-v1's monthly 2022-2024 folds over the
+# causal-v2 feature set. purged-walk-forward-v1 is bound to causal-v1 and is
+# immutable, so this is a new id rather than an edit to the existing one.
+CAMPAIGN_3_VALIDATION_SET_ID = "campaign-3-walk-forward-v1"
 _SUPPORTED_VALIDATION_SETS = frozenset(
-    {VALIDATION_SET_ID, SCREEN_VALIDATION_SET_ID}
+    {VALIDATION_SET_ID, SCREEN_VALIDATION_SET_ID, CAMPAIGN_3_VALIDATION_SET_ID}
 )
 VALIDATION_STRATEGY = "expanding"
 INTERVAL_SEMANTICS = "half_open_utc"
@@ -148,6 +152,20 @@ class ValidationPlan:
                 raise ValueError(
                     "development must end exactly when the locked test starts"
                 )
+        elif self.id == CAMPAIGN_3_VALIDATION_SET_ID:
+            # Semantic invariants only: the exact calendar is fixed by the
+            # sealed envelope over this contract, not restated here.
+            if (
+                self.feature_set != "causal-v2"
+                or self.label_set != "executable-v2"
+                or self.development_end_exclusive != self.locked_test_start
+                or self.validation_window_months != 1
+                or self.step_months != 1
+                or self.purge_minutes != 65
+                or self.max_horizon_minutes != 60
+                or self.max_quote_latency_minutes != 5
+            ):
+                raise ValueError("campaign-3 walk-forward contract is incompatible")
         elif (
             self.feature_set != "causal-v2"
             or self.label_set != "executable-v2"

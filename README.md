@@ -42,7 +42,10 @@ committed. They are excluded in `.gitignore` and will be stored privately.
 
 ## Local Setup
 
-Python 3.12 is the reference development version.
+Python 3.12 is the reference development version. LightGBM links against
+OpenMP at runtime, which macOS does not ship: install it once with
+`brew install libomp` before creating the environment. The runtime image
+installs `libgomp1` for the same reason.
 
 ```bash
 python3.12 -m venv .venv
@@ -417,6 +420,35 @@ automatically by the development gate, which refuses to evaluate a run whose
 seal is broken or whose acceptance contract is not the sealed one. Contracts
 that declare no envelope — every Campaign 1 and Campaign 2 contract — behave
 exactly as before.
+
+## Campaign 3 Stage A: Gradient Boosting
+
+Stage A tests whether the executable edge exists in a form a linear model
+cannot represent: gradient-boosted trees (LightGBM) over `causal-v2` features,
+per symbol, fold, and horizon, on the same 2022-2024 monthly purged
+walk-forward Campaign 1 used. Its four sealed documents are the hypothesis
+(`docs/research/campaign-3-lightgbm-causal-v2-hypothesis-v1.md`),
+`campaign-3-walk-forward-v1.toml`,
+`campaign-3-lightgbm-causal-v2-model-v1.toml`, and
+`campaign-3-lightgbm-causal-v2-acceptance-v1.toml`.
+
+Hyperparameters come from a three-point search space enumerated in full inside
+the sealed model contract. One candidate is chosen per horizon by expanding
+inner cross-validation over the **first fold's training window**, with the same
+65-minute purge at every inner boundary, and is then frozen for the entire
+walk-forward. That window precedes every validation fold, so no outer fold ever
+informs the choice. `num_threads` is part of the model contract because
+LightGBM only reproduces identical trees at a fixed thread count.
+
+The acceptance thresholds are byte-identical to `development-acceptance-v2`,
+the contract Campaign 1's ridge lines failed, so a Stage A pass is comparable
+to that failure rather than to a moved bar.
+
+```bash
+demofml run-development \
+  --pipeline-config configs/experiments/campaign-3-lightgbm-causal-v2-pipeline-v1.toml \
+  --workdir artifacts/runs
+```
 
 ## Next Research Phase: Tick Microstructure Features
 

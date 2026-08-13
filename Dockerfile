@@ -22,6 +22,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN groupadd --gid 10001 demofml \
     && useradd --uid 10001 --gid demofml --create-home demofml
 
+# LightGBM links against OpenMP at runtime; the slim base does not ship it.
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /wheels /wheels
 RUN python -m pip install /wheels/*.whl \
     && rm -rf /wheels
@@ -30,6 +35,9 @@ COPY configs/ /opt/demofml/configs/
 COPY pyproject.toml /opt/demofml/pyproject.toml
 COPY docs/research/campaign-2-prospective-factor-plan.md /opt/demofml/docs/research/campaign-2-prospective-factor-plan.md
 COPY docs/research/campaign-2-prospective-factor-v2.md /opt/demofml/docs/research/campaign-2-prospective-factor-v2.md
+# Sealed by campaign-3-lightgbm-causal-v2-envelope-v1: the acceptance gate
+# verifies its digest, so the image must carry the document, not just the TOMLs.
+COPY docs/research/campaign-3-lightgbm-causal-v2-hypothesis-v1.md /opt/demofml/docs/research/campaign-3-lightgbm-causal-v2-hypothesis-v1.md
 
 USER 10001:10001
 WORKDIR /home/demofml

@@ -53,6 +53,8 @@ from demofml.labels.executable import (
 )
 from demofml.models.baseline import load_baseline_config
 from demofml.models.build import run_baseline_experiment
+from demofml.models.gbm import load_gbm_config
+from demofml.models.gbm_build import run_gbm_experiment
 from demofml.reporting.acceptance import (
     load_acceptance_config,
     publish_acceptance_report,
@@ -70,14 +72,20 @@ from demofml.validation.splits import load_validation_plan
 PIPELINE_SET_ID = "development-pipeline-v2"
 PIPELINE_SET_V3_ID = "development-pipeline-v3"
 SCREEN_PIPELINE_SET_ID = "microstructure-screen-pipeline-v1"
+GBM_PIPELINE_SET_ID = "campaign-3-lightgbm-causal-v2-pipeline-v1"
 _SUPPORTED_PIPELINE_SETS = frozenset(
     {
         "development-pipeline-v1",
         PIPELINE_SET_ID,
         PIPELINE_SET_V3_ID,
         SCREEN_PIPELINE_SET_ID,
+        GBM_PIPELINE_SET_ID,
     }
 )
+# Pipelines whose bars, features, and labels are the v2 contracts. The
+# microstructure screen introduced them; Campaign 3 reuses the identical data
+# stages and changes only the model family on top of them.
+_V2_DATA_PIPELINE_SETS = frozenset({SCREEN_PIPELINE_SET_ID, GBM_PIPELINE_SET_ID})
 _CODE_REFERENCE_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _HASH_BLOCK_SIZE = 8 * 1024 * 1024
 
@@ -204,15 +212,21 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
     if config.id not in _SUPPORTED_PIPELINE_SETS:
         raise ValueError("pipeline id is not supported")
     if (
-        config.id in {PIPELINE_SET_ID, PIPELINE_SET_V3_ID, SCREEN_PIPELINE_SET_ID}
+        config.id
+        in {
+            PIPELINE_SET_ID,
+            PIPELINE_SET_V3_ID,
+            SCREEN_PIPELINE_SET_ID,
+            GBM_PIPELINE_SET_ID,
+        }
         and config.acceptance_config is None
     ):
         raise ValueError(f"{config.id} requires an acceptance config")
     if config.id == "development-pipeline-v1" and config.acceptance_config is not None:
         raise ValueError("development-pipeline-v1 cannot define acceptance")
-    if config.id == SCREEN_PIPELINE_SET_ID and config.bar_config is None:
-        raise ValueError(f"{SCREEN_PIPELINE_SET_ID} requires a bar config")
-    if config.id != SCREEN_PIPELINE_SET_ID and config.bar_config is not None:
+    if config.id in _V2_DATA_PIPELINE_SETS and config.bar_config is None:
+        raise ValueError(f"{config.id} requires a bar config")
+    if config.id not in _V2_DATA_PIPELINE_SETS and config.bar_config is not None:
         raise ValueError("published development pipelines cannot define bar_config")
     if not config.symbols or tuple(sorted(set(config.symbols))) != config.symbols:
         raise ValueError("pipeline symbols must be unique and ordered")
@@ -234,9 +248,14 @@ def _validate_contracts(
     config: PipelineConfig, dataset: DevelopmentDataset
 ) -> tuple[Any, Any]:
     plan = load_validation_plan(config.validation_config)
-    model = load_baseline_config(config.model_config)
+    model = (
+        load_gbm_config(config.model_config)
+        if config.id == GBM_PIPELINE_SET_ID
+        else load_baseline_config(config.model_config)
+    )
     portfolio = load_portfolio_config(config.portfolio_config)
     is_screen = config.id == SCREEN_PIPELINE_SET_ID
+    uses_v2_data = config.id in _V2_DATA_PIPELINE_SETS
     acceptance: Any | None = None
     if config.acceptance_config is not None:
         acceptance = (
@@ -272,7 +291,7 @@ def _validate_contracts(
         or dataset.end_exclusive != plan.locked_test_start
     ):
         raise ValueError("development dataset does not match validation boundaries")
-    if is_screen:
+    if uses_v2_data:
         expected_bars = {
             "id": "quote-bars-v2",
             "source": "cleaned-ticks-development-v1",
@@ -298,8 +317,8 @@ def _validate_contracts(
         if bars != expected_bars:
             raise ValueError("pipeline bar config is incompatible")
     expected_features: dict[str, Any] = {
-        "id": FEATURE_SET_V2_ID if is_screen else FEATURE_SET_ID,
-        "source": "quote-bars-v2" if is_screen else "quote-bars-v1",
+        "id": FEATURE_SET_V2_ID if uses_v2_data else FEATURE_SET_ID,
+        "source": "quote-bars-v2" if uses_v2_data else "quote-bars-v1",
         "decision_time": "bar_end",
         "bar_interval_minutes": BAR_INTERVAL_MINUTES,
         "return_lags_bars": [1, 3, 12],
@@ -311,19 +330,19 @@ def _validate_contracts(
                 "imbalance_aggregation": "ratio_of_rolling_count_sums",
                 "interarrival_aggregation": "mean_of_intrabar_population_std",
             }
-            if is_screen
+            if uses_v2_data
             else {}
         ),
         "gap_policy": "reset_trailing_state",
         "features": (
-            FEATURE_V2_SCHEMA.names[2:] if is_screen else FEATURE_SCHEMA.names[2:]
+            FEATURE_V2_SCHEMA.names[2:] if uses_v2_data else FEATURE_SCHEMA.names[2:]
         ),
     }
     if features != expected_features:
         raise ValueError("pipeline feature config is incompatible")
     expected_labels = {
-        "id": LABEL_SET_V2_ID if is_screen else LABEL_SET_ID,
-        "source": "quote-bars-v2" if is_screen else "quote-bars-v1",
+        "id": LABEL_SET_V2_ID if uses_v2_data else LABEL_SET_ID,
+        "source": "quote-bars-v2" if uses_v2_data else "quote-bars-v1",
         "decision_time": "bar_end",
         "entry": "first_quote_at_or_after_decision",
         "exit": "first_quote_at_or_after_horizon",
@@ -655,20 +674,21 @@ def _log_artifacts(
     root: Path,
     symbols: Sequence[str],
     acceptance_path: Path | None,
+    model_stage: str = "baseline",
 ) -> None:
     client.log_artifact(
         mlflow_run_id, str(root / "validation" / "manifest.json"), "validation"
     )
     for symbol in symbols:
-        baseline = root / "symbols" / symbol / "baseline"
+        model_output = root / "symbols" / symbol / model_stage
         client.log_artifact(
             mlflow_run_id,
-            str(baseline / "metrics.json"),
+            str(model_output / "metrics.json"),
             f"symbols/{symbol}",
         )
         client.log_artifact(
             mlflow_run_id,
-            str(baseline / "predictions.parquet"),
+            str(model_output / "predictions.parquet"),
             f"symbols/{symbol}",
         )
     for name in (
@@ -823,10 +843,16 @@ def _run_development_pipeline(
             if is_screen
             else load_acceptance_config(config.acceptance_config)
         )
-    bar_set = "quote-bars-v2" if is_screen else "quote-bars-v1"
-    feature_set = FEATURE_SET_V2_ID if is_screen else FEATURE_SET_ID
-    label_set = LABEL_SET_V2_ID if is_screen else LABEL_SET_ID
+    uses_v2_data = config.id in _V2_DATA_PIPELINE_SETS
+    is_gbm = config.id == GBM_PIPELINE_SET_ID
+    bar_set = "quote-bars-v2" if uses_v2_data else "quote-bars-v1"
+    feature_set = FEATURE_SET_V2_ID if uses_v2_data else FEATURE_SET_ID
+    label_set = LABEL_SET_V2_ID if uses_v2_data else LABEL_SET_ID
     data_end_exclusive = plan.development_end_exclusive if is_screen else None
+    # See _ACCEPTANCE_MODEL_STAGES: the model stage keeps its historical
+    # "baseline" name for the ridge lines and becomes "model" for Campaign 3.
+    model_stage = "model" if is_gbm else "baseline"
+    run_experiment = run_gbm_experiment if is_gbm else run_baseline_experiment
     run_id = _run_id(pipeline_config_path, config, code_reference)
     root = workdir.expanduser().resolve() / config.id / run_id
     acceptance_path = (
@@ -982,22 +1008,22 @@ def _run_development_pipeline(
                 symbol=symbol,
                 executions=executions,
             )
-            baseline = symbol_root / "baseline"
-            predictions = baseline / "predictions.parquet"
+            model_output = symbol_root / model_stage
+            predictions = model_output / "predictions.parquet"
             _run_stage(
                 root,
-                symbol_root / "baseline.stage.json",
-                _stage_fingerprint(run_id, "baseline", symbol),
-                [predictions, baseline / "metrics.json"],
+                symbol_root / f"{model_stage}.stage.json",
+                _stage_fingerprint(run_id, model_stage, symbol),
+                [predictions, model_output / "metrics.json"],
                 partial(
-                    run_baseline_experiment,
+                    run_experiment,
                     development_features,
                     development_labels,
                     config.validation_config,
                     config.model_config,
-                    baseline,
+                    model_output,
                 ),
-                stage="baseline",
+                stage=model_stage,
                 symbol=symbol,
                 executions=executions,
             )
@@ -1155,7 +1181,12 @@ def _run_development_pipeline(
             if tracking_complete is None:
                 _log_metrics(mlflow, mlflow_run_id, root, acceptance_path)
                 _log_artifacts(
-                    mlflow, mlflow_run_id, root, config.symbols, acceptance_path
+                    mlflow,
+                    mlflow_run_id,
+                    root,
+                    config.symbols,
+                    acceptance_path,
+                    model_stage,
                 )
                 _write_json_no_replace(
                     tracking_complete_path,

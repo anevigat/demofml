@@ -12,6 +12,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 dependencies = [
   "boto3==1.43.51",
+  "lightgbm==4.7.0",
   "mlflow-skinny==3.14.0",
   "numpy==2.5.1",
   "pyarrow==25.0.0",

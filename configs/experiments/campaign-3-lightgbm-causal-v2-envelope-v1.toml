@@ -1,0 +1,22 @@
+format_version = 1
+schema = "sealed-envelope-v1"
+id = "campaign-3-lightgbm-causal-v2-envelope-v1"
+campaign = "campaign-3"
+sealed_at = 2026-08-13T00:00:00Z
+root = "../.."
+
+[documents.hypothesis]
+path = "docs/research/campaign-3-lightgbm-causal-v2-hypothesis-v1.md"
+sha256 = "afb237095cfdb266204b59ad348bf04dc6d26527642a6a0b13a06f3456998f93"
+
+[documents.validation]
+path = "configs/experiments/campaign-3-walk-forward-v1.toml"
+sha256 = "0668840bf63a7e4046bdc4471ecfacf480320cbd67f181ca0f5e10dece471710"
+
+[documents.model]
+path = "configs/experiments/campaign-3-lightgbm-causal-v2-model-v1.toml"
+sha256 = "6195bcf403c1e59eb221f6604ec1b01236986a89bac54b908d3a5cf990b9f900"
+
+[documents.acceptance]
+path = "configs/experiments/campaign-3-lightgbm-causal-v2-acceptance-v1.toml"
+sha256 = "a1e1f6a1954f8114bd4814af76d40c8331e39fde2beb4008b5580d1b0957e99d"

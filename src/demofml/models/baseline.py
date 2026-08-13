@@ -7,6 +7,7 @@ import tomllib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Protocol
 
 import numpy as np
 import pyarrow as pa  # type: ignore[import-untyped]
@@ -167,6 +168,28 @@ class BaselineConfig:
         return _MODEL_CONTRACTS[self.id][3]
 
 
+class ResearchDataContract(Protocol):
+    """The model-contract surface that feature/label alignment depends on.
+
+    `align_research_tables` never needed ridge-specific fields; typing it
+    against this protocol lets other model families (see `models/gbm.py`) reuse
+    the identical alignment and leakage checks without `baseline.py` — frozen
+    for Campaign 1/2 reproducibility — gaining any knowledge of them.
+    """
+
+    @property
+    def feature_set(self) -> str: ...
+
+    @property
+    def label_set(self) -> str: ...
+
+    @property
+    def horizons_minutes(self) -> tuple[int, ...]: ...
+
+    @property
+    def features(self) -> tuple[str, ...]: ...
+
+
 @dataclass(frozen=True)
 class AlignedResearchData:
     """One symbol's aligned feature matrix and executable targets."""
@@ -275,7 +298,9 @@ def prediction_schema(config: BaselineConfig) -> pa.Schema:
     )
 
 
-def _validate_feature_fields(schema: pa.Schema, config: BaselineConfig) -> None:
+def _validate_feature_fields(
+    schema: pa.Schema, config: ResearchDataContract
+) -> None:
     expected_schema, expected_columns = _FEATURE_CONTRACTS[config.feature_set]
     if config.feature_set == FEATURE_SET_V2_ID and not schema.equals(
         expected_schema, check_metadata=True
@@ -303,7 +328,7 @@ def align_research_tables(
     features: pa.Table,
     labels: pa.Table,
     plan: ValidationPlan,
-    config: BaselineConfig,
+    config: ResearchDataContract,
 ) -> AlignedResearchData:
     """Align exact feature/label keys and reject locked-test observations."""
     if config.feature_set != plan.feature_set or config.label_set != plan.label_set:
@@ -406,7 +431,7 @@ def compute_feature_null_diagnostics(
     features: pa.Table,
     labels: pa.Table,
     plan: ValidationPlan,
-    config: BaselineConfig,
+    config: ResearchDataContract,
 ) -> dict[str, dict[str, dict[str, float]]]:
     """Per-fold null rate for each feature column, keyed by fold id.
 

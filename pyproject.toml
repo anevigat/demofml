@@ -14,7 +14,7 @@ dependencies = [
   "boto3==1.43.51",
   "lightgbm==4.7.0",
   "mlflow-skinny==3.14.0",
-  "numpy==2.5.1",
+  "numpy==2.5.2",
   "pyarrow==25.0.0",
   "scikit-learn==1.9.0",
   "tzdata==2025.2",

@@ -15,7 +15,7 @@ dependencies = [
   "lightgbm==4.7.0",
   "mlflow-skinny==3.14.0",
   "numpy==2.5.1",
-  "pyarrow==25.0.0",
+  "pyarrow==25.0.1",
   "scikit-learn==1.9.0",
   "tzdata==2025.2",
 ]

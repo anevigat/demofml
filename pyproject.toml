@@ -11,7 +11,7 @@ requires-python = ">=3.12,<3.15"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 dependencies = [
-  "boto3==1.43.51",
+  "boto3==1.43.72",
   "lightgbm==4.7.0",
   "mlflow-skinny==3.14.0",
   "numpy==2.5.1",

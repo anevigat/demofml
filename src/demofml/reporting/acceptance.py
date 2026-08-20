@@ -25,6 +25,7 @@ from demofml.evaluation.portfolio import (
     PORTFOLIO_SET_ID,
     PORTFOLIO_SET_V2_ID,
     PORTFOLIO_SET_V4_ID,
+    PORTFOLIO_SET_V5_ID,
     PORTFOLIO_SYMBOLS,
     load_portfolio_config,
     simulate_portfolio,
@@ -36,7 +37,12 @@ from demofml.models.baseline import (
     PREDICTION_SET_ID,
     PREDICTION_SET_V3_ID,
 )
-from demofml.models.gbm import GBM_MODEL_SET_ID, GBM_PREDICTION_SET_ID
+from demofml.models.gbm import (
+    GBM_MODEL_SET_ID,
+    GBM_MODEL_SET_V2_ID,
+    GBM_PREDICTION_SET_ID,
+    GBM_PREDICTION_SET_V2_ID,
+)
 from demofml.reporting.portfolio import portfolio_report
 from demofml.research.envelope import (
     SealedEnvelope,
@@ -56,6 +62,8 @@ ACCEPTANCE_SET_V2_ID = "development-acceptance-v2"
 PIPELINE_SET_V3_ID = "development-pipeline-v3"
 ACCEPTANCE_SET_V3_ID = "campaign-3-lightgbm-causal-v2-acceptance-v1"
 PIPELINE_SET_V4_ID = "campaign-3-lightgbm-causal-v2-pipeline-v1"
+ACCEPTANCE_SET_V4_ID = "campaign-3-lightgbm-gated-causal-v2-acceptance-v1"
+PIPELINE_SET_V5_ID = "campaign-3-lightgbm-gated-causal-v2-pipeline-v1"
 DATASET_SET_ID = "cleaned-ticks-development-v1"
 _ACCEPTANCE_PROVENANCE = {
     ACCEPTANCE_SET_ID: (
@@ -76,6 +84,12 @@ _ACCEPTANCE_PROVENANCE = {
         PORTFOLIO_SET_V4_ID,
         GBM_PREDICTION_SET_ID,
     ),
+    ACCEPTANCE_SET_V4_ID: (
+        PIPELINE_SET_V5_ID,
+        GBM_MODEL_SET_V2_ID,
+        PORTFOLIO_SET_V5_ID,
+        GBM_PREDICTION_SET_V2_ID,
+    ),
 }
 # Campaign 1/2 all ran on purged-walk-forward-v1; Campaign 3 runs the same
 # folds over causal-v2 under its own validation id, so the expected validation
@@ -84,6 +98,7 @@ _ACCEPTANCE_VALIDATION_SETS = {
     ACCEPTANCE_SET_ID: VALIDATION_SET_ID,
     ACCEPTANCE_SET_V2_ID: VALIDATION_SET_ID,
     ACCEPTANCE_SET_V3_ID: CAMPAIGN_3_VALIDATION_SET_ID,
+    ACCEPTANCE_SET_V4_ID: CAMPAIGN_3_VALIDATION_SET_ID,
 }
 # The run directory and stage name holding a run's predictions. Campaign 1/2
 # runs on disk use "baseline" and must keep replaying unchanged; Campaign 3
@@ -93,6 +108,7 @@ _ACCEPTANCE_MODEL_STAGES = {
     ACCEPTANCE_SET_ID: "baseline",
     ACCEPTANCE_SET_V2_ID: "baseline",
     ACCEPTANCE_SET_V3_ID: "model",
+    ACCEPTANCE_SET_V4_ID: "model",
 }
 _HASH_BLOCK_SIZE = 8 * 1024 * 1024
 # purged-walk-forward-v1's locked-test start, used only as the fallback for

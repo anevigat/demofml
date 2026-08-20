@@ -1,0 +1,37 @@
+format_version = 1
+id = "campaign-3-lightgbm-gated-causal-v2-acceptance-v1"
+pipeline_set = "campaign-3-lightgbm-gated-causal-v2-pipeline-v1"
+dataset_set = "cleaned-ticks-development-v1"
+validation_set = "campaign-3-walk-forward-v1"
+model_set = "gbm-lightgbm-v2"
+portfolio_set = "normalized-sleeve-portfolio-v5"
+portfolio_config = "portfolio-v5.toml"
+symbols = ["AUDUSD", "EURCHF", "EURJPY", "EURUSD", "GBPJPY", "GBPUSD", "USDCAD", "USDJPY"]
+horizons_minutes = [15, 30, 60]
+expected_fold_count = 36
+expected_stage_count = 42
+expected_authorized_files = 14
+expected_source_rows = 1624981795
+locked_test_policy = "forbidden"
+validation_config = "campaign-3-walk-forward-v1.toml"
+sealed_envelope = "campaign-3-lightgbm-gated-causal-v2-envelope-v1.toml"
+
+# Thresholds are deliberately identical to development-acceptance-v2, the
+# contract Campaign 1's ridge lines were judged against. Campaign 3 changes the
+# model family and nothing else about what counts as a result, so a pass here
+# is directly comparable to Campaign 1's failure rather than to a moved bar.
+
+[model]
+minimum_positive_folds_per_horizon = 24
+minimum_positive_symbols_per_horizon = 6
+minimum_trades_per_symbol_horizon = 100
+minimum_mean_executable_return_bps_exclusive = 0.0
+
+[portfolio]
+minimum_total_return_exclusive = 0.0
+maximum_drawdown_exclusive = 0.10
+minimum_realized_annual_volatility = 0.075
+maximum_realized_annual_volatility = 0.125
+maximum_gross_leverage = 2.0
+require_no_drawdown_halt = true
+reconciliation_tolerance_usd = 0.01

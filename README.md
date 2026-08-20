@@ -460,6 +460,39 @@ did not pay even inside the training window. The full analysis is
 `docs/research/campaign-3-stage-a-result-2026-08-20.md`; under Rule 3 of the
 protocol the 2022-2024 folds are now consumed for this question.
 
+## Campaign 3 Stage B: Gated Execution
+
+Stage B keeps Stage A's estimator unchanged and moves only the action rule. The
+evidence pointed at execution rather than capacity: Stage A lost 10.05% at
+0.61% realized volatility, the damage scaled with turnover, and the inner
+cross-validation had already rejected additional capacity from inside the
+training window. So Stage B asks whether the edge survives on a high-conviction
+subset — the upper tail of the model's own predicted-return distribution,
+optionally restricted to narrow-spread regimes.
+
+The action rule is a sealed six-point grid over conviction quantile
+(`1.0`, `0.5`, `0.25`) and spread-regime bound, selected jointly with the model
+candidate by inner cross-validation on the first fold's training window. The
+grid includes `all-signals`, which reproduces Stage A's ungated rule exactly, so
+the gates must beat the rule they replace rather than a straw man. The
+conviction cut is recomputed per fold from that fold's training rows; only the
+policy is frozen across the walk-forward.
+
+Two things are pre-registered in
+`docs/research/campaign-3-lightgbm-gated-causal-v2-hypothesis-v1.md` and worth
+repeating here. Stage B's validation period is **already consumed** — the design
+responds to results observed on 2022-2024, and no unused development period
+remains — so a pass is candidate-generating only, never confirmation. And a
+**degenerate gate is a failure, not a success**: the contract's 100-trade floor
+per symbol-horizon exists so a configuration cannot win by trading almost
+nothing.
+
+```bash
+demofml run-development \
+  --pipeline-config configs/experiments/campaign-3-lightgbm-gated-causal-v2-pipeline-v1.toml \
+  --workdir artifacts/runs
+```
+
 ## Next Research Phase: Tick Microstructure Features
 
 The next hypothesis adds information discarded by `quote-bars-v1`, rather than

@@ -11,6 +11,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import numpy as np
 import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import pytest
@@ -21,11 +22,16 @@ from demofml.labels.executable import label_schema
 from demofml.models.baseline import align_research_tables
 from demofml.models.gbm import (
     GBM_MODEL_SET_ID,
+    GBM_MODEL_SET_V2_ID,
     GBM_PREDICTION_SET_ID,
+    GBM_PREDICTION_SET_V2_ID,
+    GateCandidate,
     GBMConfig,
+    _conviction_threshold,
     load_gbm_config,
     run_walk_forward_gbm,
     select_candidate,
+    select_candidate_and_gate,
 )
 from demofml.models.gbm_build import main as gbm_main
 from demofml.models.gbm_build import run_gbm_experiment
@@ -257,7 +263,7 @@ def test_config_rejects_contracts_it_was_not_written_for() -> None:
     sealed = load_gbm_config(MODEL_CONFIG)
 
     for override, expected in (
-        ({"id": "gbm-lightgbm-v2"}, "model id is not supported"),
+        ({"id": "gbm-lightgbm-v9"}, "model id is not supported"),
         ({"feature_set": "causal-v1"}, "data contracts are incompatible"),
         ({"validation_set": "purged-walk-forward-v1"}, "campaign-3-walk-forward-v1"),
         ({"model_type": "ridge"}, "must be lightgbm"),
@@ -311,7 +317,7 @@ def test_config_rejects_the_remaining_contract_violations() -> None:
         ({"horizons_minutes": (60, 15)}, "unique and increasing"),
         ({"training_scope": "pooled"}, "must be per_symbol"),
         ({"objective": "huber"}, "must be lightgbm"),
-        ({"selection_policy": "grid-search-v1"}, "selection policy is not supported"),
+        ({"selection_policy": "grid-search-v1"}, "selection policy does not match"),
         ({"selection_metric": "sharpe"}, "selection metric is not supported"),
         ({"minimum_training_rows": 1}, "training row minima"),
         ({"minimum_inner_training_rows": 1}, "training row minima"),
@@ -408,3 +414,143 @@ def test_gbm_command_publishes_and_reports_a_run(
             model_config,
             tmp_path / "unused",
         )
+
+
+GATED_MODEL_CONFIG = CONFIGS / "campaign-3-lightgbm-gated-causal-v2-model-v1.toml"
+
+
+def _gated_config() -> GBMConfig:
+    """The sealed Stage B contract, shrunk to fixture size."""
+    sealed = load_gbm_config(GATED_MODEL_CONFIG)
+    return replace(
+        sealed,
+        minimum_training_rows=10,
+        minimum_inner_training_rows=2,
+        candidates=tuple(
+            replace(candidate, n_estimators=8, min_child_samples=2)
+            for candidate in sealed.candidates[:2]
+        ),
+    )
+
+
+def test_gated_walk_forward_publishes_its_gate_provenance() -> None:
+    features, labels = _tables()
+    config = _gated_config()
+
+    predictions = run_walk_forward_gbm(features, labels, _plan(), config)
+
+    metadata = predictions.schema.metadata
+    assert metadata[b"demofml.prediction_set"] == GBM_PREDICTION_SET_V2_ID.encode()
+    assert metadata[b"demofml.model_set"] == GBM_MODEL_SET_V2_ID.encode()
+    assert metadata[b"demofml.gate_calibration"] == b"per_fold_training_quantile"
+    sealed_gates = {gate.id for gate in config.gates}
+    assert set(predictions.column("selected_gate").to_pylist()) <= sealed_gates
+    assert set(predictions.column("action").to_pylist()) <= {"long", "short", "flat"}
+    # Stage A's schema must stay free of Stage B's columns.
+    assert "selected_gate" not in run_walk_forward_gbm(
+        features, labels, _plan(), _config()
+    ).column_names
+
+
+def test_the_ungated_gate_reproduces_stage_a_exactly() -> None:
+    """`all-signals` is in the search space so gating has to earn its place.
+
+    If it did not reproduce the Stage A rule, the search would be comparing the
+    gates against a straw man rather than against the rule they must beat.
+    """
+    features, labels = _tables()
+    plan = _plan()
+    stage_a = _config()
+    only_ungated = replace(
+        _gated_config(),
+        candidates=stage_a.candidates,
+        gates=tuple(g for g in _gated_config().gates if g.id == "all-signals")
+        + (GateCandidate("unreachable", 0.25, -99.0),),
+    )
+
+    gated = run_walk_forward_gbm(features, labels, plan, only_ungated)
+    ungated = run_walk_forward_gbm(features, labels, plan, stage_a)
+
+    assert gated.column("selected_gate").to_pylist()[0] == "all-signals"
+    assert gated.column("action").to_pylist() == ungated.column("action").to_pylist()
+    assert (
+        gated.column("realized_return").to_pylist()
+        == ungated.column("realized_return").to_pylist()
+    )
+
+
+def test_a_tighter_gate_never_trades_more_than_a_looser_one() -> None:
+    """Monotonicity: conviction and spread gates can only remove trades."""
+    features, labels = _tables()
+    plan = _plan()
+    base = _gated_config()
+
+    def traded(gate: GateCandidate) -> int:
+        config = replace(base, gates=(gate, GateCandidate("decoy", 0.25, -99.0)))
+        table = run_walk_forward_gbm(features, labels, plan, config)
+        return sum(1 for a in table.column("action").to_pylist() if a != "flat")
+
+    loose = traded(GateCandidate("loose", 1.0, None))
+    tight = traded(GateCandidate("tight", 0.25, None))
+    spread_gated = traded(GateCandidate("spread", 1.0, 0.0))
+
+    assert tight <= loose
+    assert spread_gated <= loose
+
+
+def test_gate_selection_cannot_see_the_validation_fold() -> None:
+    plan = _plan()
+    config = _gated_config()
+    fold = plan.folds()[0]
+
+    chosen = select_candidate_and_gate(
+        align_research_tables(*_tables(), plan, config), fold, 60, config
+    )
+    inverted = select_candidate_and_gate(
+        align_research_tables(*_tables(validation_signal=-25.0), plan, config),
+        fold,
+        60,
+        config,
+    )
+
+    assert chosen == inverted
+
+
+def test_conviction_threshold_is_computed_from_training_rows_only() -> None:
+    scores = np.array([-1.0, 0.1, 0.2, 0.3, 0.4], dtype=float)
+
+    keep_all = _conviction_threshold(scores, GateCandidate("a", 1.0, None), 0.0)
+    keep_half = _conviction_threshold(scores, GateCandidate("b", 0.5, None), 0.0)
+
+    assert keep_all == 0.1
+    assert keep_half > keep_all
+    # No positive score at all means the gate refuses to trade, never crashes.
+    negative = np.array([-1.0, -2.0], dtype=float)
+    assert _conviction_threshold(
+        negative, GateCandidate("c", 0.5, None), 0.0
+    ) == float("inf")
+
+
+def test_gated_config_rejects_contract_violations() -> None:
+    sealed = load_gbm_config(GATED_MODEL_CONFIG)
+    stage_a = load_gbm_config(MODEL_CONFIG)
+
+    with pytest.raises(ValueError, match="cannot define action gates"):
+        replace(stage_a, gates=sealed.gates)
+    with pytest.raises(ValueError, match="at least two gates"):
+        replace(sealed, gates=sealed.gates[:1])
+    with pytest.raises(ValueError, match="gate ids must be unique"):
+        replace(sealed, gates=(sealed.gates[0], sealed.gates[0]))
+    with pytest.raises(ValueError, match="selection policy does not match"):
+        replace(sealed, selection_policy="inner-purged-cv-first-fold-v1")
+    with pytest.raises(KeyError, match="unknown gate"):
+        sealed.gate("does-not-exist")
+
+    for override, expected in (
+        ({"id": ""}, "gate id cannot be empty"),
+        ({"conviction_quantile": 0.0}, "conviction_quantile must be in"),
+        ({"conviction_quantile": 1.5}, "conviction_quantile must be in"),
+        ({"spread_zscore_maximum": float("nan")}, "must be finite when set"),
+    ):
+        with pytest.raises(ValueError, match=expected):
+            replace(sealed.gates[0], **override)

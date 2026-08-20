@@ -29,7 +29,9 @@ from demofml.models.baseline import (
 )
 from demofml.models.gbm import (
     GBM_MODEL_SET_ID,
+    GBM_MODEL_SET_V2_ID,
     GBM_PREDICTION_SET_ID,
+    GBM_PREDICTION_SET_V2_ID,
     load_gbm_config,
 )
 from demofml.orchestration.development import load_pipeline_config
@@ -286,3 +288,61 @@ def test_campaign_3_contracts_are_sealed_and_mutually_consistent() -> None:
     assert envelope.resolved_path("model") == (
         configs / "campaign-3-lightgbm-causal-v2-model-v1.toml"
     )
+
+
+def test_campaign_3_stage_b_contracts_are_sealed_and_consistent() -> None:
+    """Stage B reuses Stage A's estimator and folds; only the action rule moves."""
+    configs = PROJECT_ROOT / "configs/experiments"
+    stage_a = load_gbm_config(configs / "campaign-3-lightgbm-causal-v2-model-v1.toml")
+    model = load_gbm_config(
+        configs / "campaign-3-lightgbm-gated-causal-v2-model-v1.toml"
+    )
+    portfolio = load_portfolio_config(configs / "portfolio-v5.toml")
+    acceptance = load_acceptance_config(
+        configs / "campaign-3-lightgbm-gated-causal-v2-acceptance-v1.toml"
+    )
+    pipeline = load_pipeline_config(
+        configs / "campaign-3-lightgbm-gated-causal-v2-pipeline-v1.toml"
+    )
+
+    assert model.id == GBM_MODEL_SET_V2_ID
+    assert model.prediction_set == GBM_PREDICTION_SET_V2_ID
+    assert model.validation_set == CAMPAIGN_3_VALIDATION_SET_ID
+    # Same estimator, same folds, same features: only the action rule differs.
+    assert model.candidates == stage_a.candidates
+    assert model.features == stage_a.features
+    assert model.random_seed == stage_a.random_seed
+    assert model.num_threads == stage_a.num_threads
+
+    gate_ids = [gate.id for gate in model.gates]
+    assert len(gate_ids) == 6
+    # The ungated rule must be in the space, or the gates face a straw man.
+    ungated = model.gate("all-signals")
+    assert ungated.conviction_quantile == 1.0
+    assert ungated.spread_zscore_maximum is None
+    assert min(g.conviction_quantile for g in model.gates) == 0.25
+
+    assert portfolio.model_set == model.id
+    assert portfolio.prediction_set == model.prediction_set
+    assert acceptance.model_set == model.id
+    assert acceptance.portfolio_set == portfolio.id
+    assert acceptance.pipeline_set == pipeline.id
+
+    # The bar does not move between variants.
+    stage_a_acceptance = load_acceptance_config(
+        configs / "campaign-3-lightgbm-causal-v2-acceptance-v1.toml"
+    )
+    for field in (
+        "minimum_positive_folds_per_horizon",
+        "minimum_positive_symbols_per_horizon",
+        "minimum_trades_per_symbol_horizon",
+        "minimum_mean_executable_return_bps_exclusive",
+        "maximum_drawdown_exclusive",
+        "minimum_total_return_exclusive",
+    ):
+        assert getattr(acceptance, field) == getattr(stage_a_acceptance, field)
+
+    assert acceptance.sealed_envelope is not None
+    envelope = load_sealed_envelope(acceptance.sealed_envelope)
+    verify_sealed_envelope(envelope)
+    assert envelope.id == "campaign-3-lightgbm-gated-causal-v2-envelope-v1"

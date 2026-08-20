@@ -1,0 +1,14 @@
+format_version = 1
+id = "campaign-3-lightgbm-gated-causal-v2-pipeline-v1"
+dataset_config = "../datasets/cleaned-ticks-development-v1.toml"
+bar_config = "../bars/quote-bars-v2.toml"
+feature_config = "../features/causal-v2.toml"
+label_config = "executable-labels-v2.toml"
+validation_config = "campaign-3-walk-forward-v1.toml"
+model_config = "campaign-3-lightgbm-gated-causal-v2-model-v1.toml"
+portfolio_config = "portfolio-v5.toml"
+acceptance_config = "campaign-3-lightgbm-gated-causal-v2-acceptance-v1.toml"
+symbols = ["AUDUSD", "EURCHF", "EURJPY", "EURUSD", "GBPJPY", "GBPUSD", "USDCAD", "USDJPY"]
+mlflow_experiment = "demofml-campaign-3"
+locked_test_policy = "forbidden"
+resume_policy = "verified_stage_fingerprint"

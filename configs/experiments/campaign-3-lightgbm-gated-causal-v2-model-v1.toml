@@ -1,0 +1,128 @@
+id = "gbm-lightgbm-v2"
+feature_set = "causal-v2"
+label_set = "executable-v2"
+validation_set = "campaign-3-walk-forward-v1"
+horizons_minutes = [15, 30, 60]
+training_scope = "per_symbol"
+model_type = "lightgbm"
+objective = "l2"
+selection_policy = "inner-purged-cv-conviction-gate-v1"
+selection_metric = "mean_executable_return_bps"
+inner_folds = 3
+inner_purge_minutes = 65
+minimum_inner_training_rows = 5000
+action_threshold_bps = 0.0
+minimum_training_rows = 20
+random_seed = 1729
+num_threads = 4
+deterministic = true
+locked_test_policy = "forbidden"
+
+features = [
+  "mid_return_1",
+  "mid_return_3",
+  "mid_return_12",
+  "realized_volatility_12",
+  "realized_volatility_72",
+  "spread_bps",
+  "spread_zscore_72",
+  "mid_range_bps",
+  "quote_count_log1p",
+  "staleness_seconds",
+  "elapsed_seconds",
+  "hour_sin",
+  "hour_cos",
+  "weekday_sin",
+  "weekday_cos",
+  "bid_ask_update_imbalance_15m",
+  "bid_ask_update_imbalance_60m",
+  "mid_tick_imbalance_15m",
+  "mid_tick_imbalance_60m",
+  "spread_change_imbalance_15m",
+  "spread_change_imbalance_60m",
+  "interarrival_dispersion_seconds_15m",
+  "interarrival_dispersion_seconds_60m",
+]
+
+# The complete sealed search space. Three points chosen a priori from standard
+# gradient-boosting practice on noisy financial series, spanning shallow and
+# heavily regularized through deep and fast. Selection happens only inside a
+# fold's training window (selection_policy above); no candidate may be added,
+# removed, or re-centred after the first fold without a new model version and a
+# data-use ledger entry.
+
+[[candidates]]
+id = "shallow-strong-regularization"
+num_leaves = 15
+max_depth = 4
+learning_rate = 0.03
+n_estimators = 400
+min_child_samples = 1000
+colsample_bytree = 0.6
+subsample = 0.7
+subsample_freq = 1
+reg_lambda = 50.0
+
+[[candidates]]
+id = "balanced"
+num_leaves = 31
+max_depth = 6
+learning_rate = 0.05
+n_estimators = 300
+min_child_samples = 500
+colsample_bytree = 0.7
+subsample = 0.8
+subsample_freq = 1
+reg_lambda = 10.0
+
+[[candidates]]
+id = "deep-fast"
+num_leaves = 63
+max_depth = 8
+learning_rate = 0.10
+n_estimators = 200
+min_child_samples = 200
+colsample_bytree = 0.8
+subsample = 0.8
+subsample_freq = 1
+reg_lambda = 1.0
+
+# The sealed action-rule search space. `conviction_quantile` is the fraction of
+# the decisions the base rule would trade that survive the gate, ranked by
+# predicted return; the cut itself is recomputed per fold from that fold's
+# training rows, never fitted on validation data. `spread_zscore_maximum`
+# bounds `spread_zscore_72`, which is already standardized; omitting it
+# disables the spread gate. `all-signals` reproduces Stage A's rule exactly and
+# is included so that gating has to earn its place: if the inner
+# cross-validation selects it, the gates lost on their own terms.
+#
+# The quantile grid is sized so no cell is structurally disqualified: Stage A's
+# thinnest cell traded 609 times, and retaining a quarter of that clears the
+# contract's 100-trade floor.
+
+[[gates]]
+id = "all-signals"
+conviction_quantile = 1.0
+
+[[gates]]
+id = "top-half"
+conviction_quantile = 0.5
+
+[[gates]]
+id = "top-quarter"
+conviction_quantile = 0.25
+
+[[gates]]
+id = "narrow-spread"
+conviction_quantile = 1.0
+spread_zscore_maximum = 0.0
+
+[[gates]]
+id = "top-half-narrow-spread"
+conviction_quantile = 0.5
+spread_zscore_maximum = 0.0
+
+[[gates]]
+id = "top-quarter-narrow-spread"
+conviction_quantile = 0.25
+spread_zscore_maximum = 0.0

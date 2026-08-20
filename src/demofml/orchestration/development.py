@@ -73,6 +73,7 @@ PIPELINE_SET_ID = "development-pipeline-v2"
 PIPELINE_SET_V3_ID = "development-pipeline-v3"
 SCREEN_PIPELINE_SET_ID = "microstructure-screen-pipeline-v1"
 GBM_PIPELINE_SET_ID = "campaign-3-lightgbm-causal-v2-pipeline-v1"
+GBM_GATED_PIPELINE_SET_ID = "campaign-3-lightgbm-gated-causal-v2-pipeline-v1"
 _SUPPORTED_PIPELINE_SETS = frozenset(
     {
         "development-pipeline-v1",
@@ -80,12 +81,17 @@ _SUPPORTED_PIPELINE_SETS = frozenset(
         PIPELINE_SET_V3_ID,
         SCREEN_PIPELINE_SET_ID,
         GBM_PIPELINE_SET_ID,
+        GBM_GATED_PIPELINE_SET_ID,
     }
 )
 # Pipelines whose bars, features, and labels are the v2 contracts. The
 # microstructure screen introduced them; Campaign 3 reuses the identical data
 # stages and changes only the model family on top of them.
-_V2_DATA_PIPELINE_SETS = frozenset({SCREEN_PIPELINE_SET_ID, GBM_PIPELINE_SET_ID})
+_V2_DATA_PIPELINE_SETS = frozenset(
+    {SCREEN_PIPELINE_SET_ID, GBM_PIPELINE_SET_ID, GBM_GATED_PIPELINE_SET_ID}
+)
+# Pipelines whose model stage is the gradient-boosting family.
+_GBM_PIPELINE_SETS = frozenset({GBM_PIPELINE_SET_ID, GBM_GATED_PIPELINE_SET_ID})
 _CODE_REFERENCE_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _HASH_BLOCK_SIZE = 8 * 1024 * 1024
 
@@ -218,6 +224,7 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
             PIPELINE_SET_V3_ID,
             SCREEN_PIPELINE_SET_ID,
             GBM_PIPELINE_SET_ID,
+            GBM_GATED_PIPELINE_SET_ID,
         }
         and config.acceptance_config is None
     ):
@@ -250,7 +257,7 @@ def _validate_contracts(
     plan = load_validation_plan(config.validation_config)
     model = (
         load_gbm_config(config.model_config)
-        if config.id == GBM_PIPELINE_SET_ID
+        if config.id in _GBM_PIPELINE_SETS
         else load_baseline_config(config.model_config)
     )
     portfolio = load_portfolio_config(config.portfolio_config)
@@ -844,7 +851,7 @@ def _run_development_pipeline(
             else load_acceptance_config(config.acceptance_config)
         )
     uses_v2_data = config.id in _V2_DATA_PIPELINE_SETS
-    is_gbm = config.id == GBM_PIPELINE_SET_ID
+    is_gbm = config.id in _GBM_PIPELINE_SETS
     bar_set = "quote-bars-v2" if uses_v2_data else "quote-bars-v1"
     feature_set = FEATURE_SET_V2_ID if uses_v2_data else FEATURE_SET_ID
     label_set = LABEL_SET_V2_ID if uses_v2_data else LABEL_SET_ID

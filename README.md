@@ -450,6 +450,16 @@ demofml run-development \
   --workdir artifacts/runs
 ```
 
+**Outcome: refuted.** The run completed all 42 stages and failed its sealed
+acceptance contract, `accepted=false` with 13 checks passing and 7 failing.
+All 24 symbol-horizon cells were negative, pooled means were
+`-0.018 / -0.038 / -0.070` bps at 15/30/60 minutes, and the portfolio returned
+`-10.05%` and tripped its drawdown halt. Every symbol's inner cross-validation
+independently selected the most regularized candidate, so the added capacity
+did not pay even inside the training window. The full analysis is
+`docs/research/campaign-3-stage-a-result-2026-08-20.md`; under Rule 3 of the
+protocol the 2022-2024 folds are now consumed for this question.
+
 ## Next Research Phase: Tick Microstructure Features
 
 The next hypothesis adds information discarded by `quote-bars-v1`, rather than
